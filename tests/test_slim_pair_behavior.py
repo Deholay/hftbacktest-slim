@@ -262,3 +262,62 @@ def test_strategy_clock_is_step_based_and_honors_max_steps(tmp_path: Path) -> No
     assert backtester.python_decisions == 2
     assert summary.loc[0, "python_decisions"] == 2
     assert len(backtester.market_frame()) == 1  # final market only
+
+
+def test_event_clock_captures_transient_feed_signal_missed_by_step_clock(
+    tmp_path: Path,
+) -> None:
+    spot_rows = [
+        (0, 100, 110, 99.0, 100.0, 10.0, 10.0, 100.0, 1),
+    ]
+    future_rows = [
+        (0, 100, 110, 100.0, 101.0, 10.0, 10.0, 100.0, 1),
+        (1, 111, 111, 102.0, 103.0, 10.0, 10.0, 102.0, 2),
+        (2, 112, 112, 100.0, 101.0, 10.0, 10.0, 100.0, 3),
+        (3, 130, 130, 100.0, 101.0, 10.0, 10.0, 100.0, 4),
+    ]
+    pair = _pair(entry_threshold_pct=0.01)
+
+    _, step_trades, _ = _run(
+        tmp_path,
+        spot_rows,
+        future_rows,
+        pair=pair,
+        step_ns=10,
+        strategy_clock="step",
+        max_steps=2,
+        max_trades=None,
+    )
+    event_backtester, event_trades, event_summary = _run(
+        tmp_path,
+        spot_rows,
+        future_rows,
+        pair=pair,
+        strategy_clock="event",
+        max_steps=10,
+        max_trades=1,
+    )
+
+    assert step_trades.empty
+    assert len(event_trades) == 1
+    assert event_trades.loc[0, "status"] == "FILLED"
+    assert event_trades.loc[0, "signal_timestamp"] == 111
+    assert event_summary.loc[0, "strategy_clock"] == "event"
+    assert event_summary.loc[0, "step_ns"] is None
+    assert event_backtester.python_decisions == 2
+
+
+def test_event_clock_rejects_reference_execution_before_engine_construction(
+    tmp_path: Path,
+) -> None:
+    missing = tmp_path / "missing.npz"
+    config = HbtPairBacktestConfig(
+        pair=_pair(),
+        spot=HbtAssetConfig("S", missing, "stock", 1000.0),
+        future=HbtAssetConfig("F", missing, "future", 1000.0),
+        strategy_clock="event",
+        execution_engine="reference",
+    )
+
+    with pytest.raises(ValueError, match="requires the slim"):
+        HbtPairBacktester(config).run()

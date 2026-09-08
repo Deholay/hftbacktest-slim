@@ -66,6 +66,10 @@ def default_notebook_args(**overrides: Any) -> Namespace:
 
 def prepare_args(args: Namespace) -> Namespace:
     """Resolve project-relative paths and create the configured output folder."""
+    if args.engine == "slim":
+        args.market_data_cache = "compact"
+    if getattr(args, "strategy_clock", "step") == "event" and args.engine != "slim":
+        raise ValueError("strategy_clock='event' requires engine='slim'")
     args.base_config = resolve_project_path(Path(args.base_config))
     args.calendar = resolve_project_path(Path(args.calendar))
     args.stockinfo = resolve_project_path(Path(args.stockinfo))

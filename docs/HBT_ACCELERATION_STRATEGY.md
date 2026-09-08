@@ -78,7 +78,8 @@ Benchmark sources:
 - Preserve the requested date and pair universe, exclusions, conversion audit,
   errors, carry, expiry handling, fills, latency events, and capital candidates.
 - Preserve the current one-second strategy decision clock unless a run
-  explicitly configures a different `step_ms`.
+  explicitly selects the separately identified `event` clock or configures a
+  different `step_ms`.
 - Preserve independent feed, order-entry, and response latency for both legs.
 - Preserve deterministic ordering for equal-timestamp local feed, local order,
   exchange feed, and exchange order events.
@@ -378,15 +379,20 @@ Never label a legacy fallback result as true FOK/IOC.
 
 ### Strategy clock
 
-The current default evaluates at `step_ms`, normally one second, after HBT has
-processed events through that time. A fused kernel must not evaluate on every
-BBO update.
+The default evaluates at `step_ms`, normally one second, after HBT has processed
+events through that time. The optional slim-only `event` clock is a separate
+semantic baseline: it evaluates immediately after every local BBO feed row from
+either asset. It must never be enabled implicitly or compared to the fixed-step
+baseline as if their fills were expected to match.
 
 Maintain next timestamps for the strategy clock, both local feeds, both
-exchange feeds, order requests, and order responses. Process internal events
-through the next strategy timestamp, then evaluate once. Order-response waits,
-post-first-feed waits, timeouts, and end-of-data behavior add explicit wakeups
-without converting the entire strategy to event-by-event evaluation.
+exchange feeds, order requests, and order responses. Fixed-step mode processes
+internal events through the next strategy timestamp, then evaluates once.
+Event mode processes deterministic scheduler events through exactly one next
+local feed row, then evaluates once. Order-response waits, post-first-feed
+waits, timeouts, and end-of-data behavior remain explicit execution wakeups;
+they do not create concurrent strategy decisions while an order sequence is in
+progress.
 
 ### Equal-timestamp priority
 
@@ -501,7 +507,7 @@ chain. Never skip a failed or incomplete date and silently continue carry.
 | --- | --- |
 | FOK/IOC silently executes as GTC | Strict TIF mapping, errors on unknown values, separate semantic baselines |
 | Annual detailed frames exhaust RAM | Persist and release each date; stream reports and compatibility CSVs |
-| Slim engine evaluates every feed event | Explicit `step_ms` strategy clock and parity tests |
+| Event clock is confused with fixed-step parity | Explicit named clock mode, distinct manifest/output identity, and separate tests |
 | Equal timestamps produce different fills | HBT-compatible priority key and golden collision tests |
 | Daily global latency shift changes symbols | Raw local time plus per-symbol correction metadata |
 | Source order is not monotonic | Stable source sequence and optional exchange/local order sidecars |

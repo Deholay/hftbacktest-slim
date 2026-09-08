@@ -1,4 +1,4 @@
-"""ctypes declarations and instance-owned calls for native ABI version 1."""
+"""ctypes declarations and instance-owned calls for native ABI version 2."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from ..config import AssetConfig
 from ..errors import AbiMismatchError, NativeLibraryError, NativeLibraryNotFoundError
 
 
-NATIVE_ABI_VERSION = 1
+NATIVE_ABI_VERSION = 2
 LIBRARY_ENVIRONMENT_VARIABLE = "HFTBACKTEST_SLIM_LIBRARY"
 
 
@@ -187,6 +187,8 @@ class NativeBinding:
         library.hbt_slim_current_timestamp.restype = ctypes.c_int64
         library.hbt_slim_elapse.argtypes = [pointer, ctypes.c_int64]
         library.hbt_slim_elapse.restype = ctypes.c_int32
+        library.hbt_slim_advance_to_next_feed.argtypes = [pointer]
+        library.hbt_slim_advance_to_next_feed.restype = ctypes.c_int32
         library.hbt_slim_depth.argtypes = [
             pointer,
             ctypes.c_size_t,
@@ -262,6 +264,9 @@ class NativeBinding:
 
     def elapse(self, handle: int, duration_ns: int) -> int:
         return int(self.library.hbt_slim_elapse(handle, int(duration_ns)))
+
+    def advance_to_next_feed(self, handle: int) -> int:
+        return int(self.library.hbt_slim_advance_to_next_feed(handle))
 
     def depth(self, handle: int, asset_no: int) -> tuple[int, _BboView]:
         value = _BboView()

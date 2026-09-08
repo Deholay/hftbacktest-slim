@@ -81,6 +81,9 @@ class SlimExecutionAdapter:
     def advance(self, duration_ns: int) -> bool:
         return self._backend.advance(duration_ns)
 
+    def advance_to_next_feed(self) -> bool:
+        return self._backend.advance_to_next_feed()
+
     def depth(self, asset_no: int) -> ExecutionDepth:
         raw = self._backend.depth(asset_no)
         tick_size = self._tick_sizes[asset_no]

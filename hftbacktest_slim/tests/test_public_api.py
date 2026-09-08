@@ -79,7 +79,7 @@ def test_public_exports_are_the_implemented_neutral_runtime() -> None:
 def test_package_version_matches_project_metadata() -> None:
     project_root = Path(__file__).resolve().parents[1]
     metadata = tomllib.loads((project_root / "pyproject.toml").read_text(encoding="utf-8"))
-    assert hftbacktest_slim.__version__ == "0.3.0"
+    assert hftbacktest_slim.__version__ == "0.4.0"
     assert metadata["project"]["version"] == hftbacktest_slim.__version__
 
 
@@ -165,5 +165,5 @@ def test_exception_hierarchy() -> None:
     assert issubclass(OrderSubmissionError, NativeCallError)
 
 
-def test_engine_implementation_version_is_unchanged() -> None:
-    assert SLIM_ENGINE_VERSION == "rust-0.2.0"
+def test_engine_implementation_version_identifies_next_feed_clock() -> None:
+    assert SLIM_ENGINE_VERSION == "rust-0.3.0"

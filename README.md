@@ -105,6 +105,19 @@ Slim 會保留設定的 `step_ms` 策略決策時鐘、各腿獨立的 feed/orde
 `--strategy-engine python` 則供除錯或 custom strategy 使用。Slim 使用共用的 Python
 策略迴圈，而 scheduling、latency、市場狀態與 matching 由 Rust core 執行。
 
+Slim 也提供獨立的逐行情語意。指定 `--strategy-clock event` 後，任一腿的本地 BBO
+feed row 都會喚醒策略並立即重算；未指定時仍維持既有的
+`--strategy-clock step --step-ms 1000` 基準。Event clock 不支援 reference engine，
+且預設輸出目錄會加上 `_clock_event`，避免和固定步進結果混用：
+
+```bash
+python3 future_spot/test/run_full_backtest.py \
+  --engine slim \
+  --strategy-clock event \
+  --start-date 2026-09-07 \
+  --end-date 2026-09-07
+```
+
 #### Slim engine 實作位置
 
 | 路徑 | Slim engine 職責 |

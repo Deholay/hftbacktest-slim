@@ -9,7 +9,7 @@ from scripts.hbt_common import apply_queue_model, get_order, hbt_time_in_force, 
 from scripts.hbt_types import HbtAssetConfig
 from scripts.tw_stock_hftbacktest import import_hftbacktest, workspace_root
 
-from .execution_port import ExecutionDepth, ExecutionOrder
+from .execution_port import ExecutionDepth, ExecutionInvariantError, ExecutionOrder
 from .hbt_helpers import infer_hbt_asset_tick_size
 
 
@@ -70,6 +70,11 @@ class ReferenceExecutionAdapter:
 
     def advance(self, duration_ns: int) -> bool:
         return int(self._backend.elapse(int(duration_ns))) == 0
+
+    def advance_to_next_feed(self) -> bool:
+        raise ExecutionInvariantError(
+            "event strategy clock is supported only by the slim execution engine"
+        )
 
     def depth(self, asset_no: int) -> ExecutionDepth:
         raw = self._backend.depth(asset_no)

@@ -98,6 +98,7 @@ class _WrongAbiLibrary:
             "hbt_slim_free",
             "hbt_slim_current_timestamp",
             "hbt_slim_elapse",
+            "hbt_slim_advance_to_next_feed",
             "hbt_slim_depth",
             "hbt_slim_feed_latency",
             "hbt_slim_order_latency",
@@ -115,7 +116,7 @@ def test_abi_mismatch_is_typed_and_reports_path(
     path = tmp_path / "wrong-abi.so"
     path.touch()
     monkeypatch.setattr(binding.ctypes, "CDLL", lambda _path: _WrongAbiLibrary())
-    with pytest.raises(AbiMismatchError, match=r"expected 1, got 99") as caught:
+    with pytest.raises(AbiMismatchError, match=r"expected 2, got 99") as caught:
         binding.NativeBinding(path)
     assert str(path.resolve()) in str(caught.value)
 

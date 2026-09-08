@@ -5,7 +5,7 @@ use crate::types::{AssetConfig, BboRow, BboView, OrderView};
 
 #[unsafe(no_mangle)]
 pub extern "C" fn hbt_slim_version() -> u32 {
-    1
+    2
 }
 
 #[unsafe(no_mangle)]
@@ -95,6 +95,21 @@ pub unsafe extern "C" fn hbt_slim_elapse(engine: *mut SlimEngine, duration_ns: i
         return -1;
     };
     engine.elapse(duration_ns)
+}
+
+#[unsafe(no_mangle)]
+/// Advances through scheduler events and stops immediately after the next local feed event.
+///
+/// Returns `0` after one feed event, `1` when no local feed events remain, and a negative value
+/// on error.
+///
+/// # Safety
+/// `engine` must point to a live, exclusively borrowed [`SlimEngine`].
+pub unsafe extern "C" fn hbt_slim_advance_to_next_feed(engine: *mut SlimEngine) -> i32 {
+    let Some(engine) = (unsafe { engine.as_mut() }) else {
+        return -1;
+    };
+    engine.advance_to_next_feed()
 }
 
 #[unsafe(no_mangle)]

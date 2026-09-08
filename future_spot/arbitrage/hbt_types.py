@@ -12,6 +12,7 @@ class HbtPairBacktestConfig:
     spot: HbtAssetConfig
     future: HbtAssetConfig
     first_leg: str = "future"
+    strategy_clock: str = "step"
     step_ns: int = 1_000_000_000
     response_timeout_ns: int = 50_000_000
     second_leg_delay_ns: int = 0

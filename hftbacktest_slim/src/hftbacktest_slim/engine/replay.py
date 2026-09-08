@@ -55,7 +55,7 @@ class SlimEngine:
         adjustments = [
             partition.local_timestamp_adjustment_ns for partition in loaded
         ]
-        # Keep every NumPy array live through hbt_slim_create. ABI v1 copies
+        # Keep every NumPy array live through hbt_slim_create. ABI v2 copies
         # the rows before returning, so they can be released afterward.
         handle = self._binding.create(row_arrays, adjustments, self._assets)
         if not handle:
@@ -104,6 +104,23 @@ class SlimEngine:
         if rc == 1:
             return False
         raise NativeCallError(f"slim clock advancement failed with native code {rc}")
+
+    def advance_to_next_feed(self) -> bool:
+        """Advance through scheduled events and stop after one local feed update.
+
+        Exchange-data and pending order events ordered before that feed are
+        processed first. The method returns ``False`` without advancing when
+        no local feed updates remain.
+        """
+
+        rc = self._binding.advance_to_next_feed(self._open_handle())
+        if rc == 0:
+            return True
+        if rc == 1:
+            return False
+        raise NativeCallError(
+            f"slim next-feed advancement failed with native code {rc}"
+        )
 
     def depth(self, asset_no: int) -> DepthView:
         asset = validate_asset_no(asset_no)

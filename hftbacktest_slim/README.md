@@ -1,13 +1,12 @@
 # hftbacktest-slim
 
 `hftbacktest-slim` is the project-owned, strategy-neutral compact-BBO data and
-replay runtime. Version `0.3.0` is the stable Phase 6 public boundary: the canonical
+replay runtime. Version `0.4.0` extends the stable Phase 6 public boundary: the canonical
 schema/native dtype, Top-5 normalization, timestamp ordering, audit, streaming
 cache builder, manifest validation, sidecars, resource controls, publication,
 reader, compact CLIs, and neutral engine API live in this standalone package,
 and `future_spot` now consumes that API through strategy-owned adapters. The native crate
-remains version `0.2.0`, engine identity remains `rust-0.2.0`, and C ABI version
-remains `1`.
+is version `0.3.0`, engine identity is `rust-0.3.0`, and C ABI version is `2`.
 
 The supported profile is deliberately constrained:
 
@@ -54,7 +53,10 @@ with SlimEngine([left, right]) as engine:
 ```
 
 `advance()` returns `False` when the requested clock step extends beyond the
-remaining native events. `wait_order_response()` returns `False` on timeout.
+remaining native events. `advance_to_next_feed()` processes scheduler events in
+deterministic priority order and stops immediately after one local feed row; it
+returns `False` without advancing when no local feed row remains.
+`wait_order_response()` returns `False` on timeout.
 `submit_order()` returns `None` or raises a typed submission/configuration
 error. `depth()` returns `DepthView`; `feed_latency()` and `order_latency()`
 return `FeedLatency | None` and `OrderLatency | None`; `order()` returns the
@@ -153,7 +155,7 @@ The library is resolved deterministically without a system-basename search:
 
 The library is loaded only when an engine is constructed. Importing
 `hftbacktest_slim` does not load the shared object. `engine.library_path`
-records the resolved diagnostic path. ABI values other than `1` raise
+records the resolved diagnostic path. ABI values other than `2` raise
 `AbiMismatchError` before engine construction.
 
 Build the development artifact from the repository root:

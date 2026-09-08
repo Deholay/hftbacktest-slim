@@ -122,6 +122,20 @@ def test_slim_adapter_construction_mapping_order_and_close(tmp_path: Path) -> No
         _ = adapter.current_timestamp
 
 
+def test_slim_adapter_exposes_next_feed_advancement(tmp_path: Path) -> None:
+    spot, future, _, _ = _configs(tmp_path)
+    adapter, _ = SlimExecutionAdapter.open(
+        spot, future, spot_tick_size=1.0, future_tick_size=1.0
+    )
+    try:
+        assert adapter.advance_to_next_feed()
+        assert adapter.current_timestamp == 110
+        assert adapter.depth(1).best_bid == 109.0
+        assert math.isnan(adapter.depth(0).best_bid)
+    finally:
+        adapter.close()
+
+
 def test_slim_adapter_rejects_unsupported_tif_and_active_order() -> None:
     pair = PairConfig(
         "x",

@@ -73,10 +73,18 @@ class HbtPairBacktester:
         self.python_decisions = 0
 
     def run(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+        strategy_clock = self.config.strategy_clock.strip().lower()
+        execution_engine = self.config.execution_engine.strip().lower()
+        if strategy_clock not in {"step", "event"}:
+            raise ValueError(
+                f"strategy_clock must be 'step' or 'event': {self.config.strategy_clock}"
+            )
+        if strategy_clock == "event" and execution_engine != "slim":
+            raise ValueError("event strategy clock requires the slim execution engine")
         hbt = self._build_execution_engine()
         try:
             engine = self.config.strategy_engine.strip().lower()
-            if self.config.execution_engine.strip().lower() == "slim":
+            if execution_engine == "slim":
                 engine = "python"
             if engine == "python":
                 self._run_python(hbt)
@@ -99,7 +107,7 @@ class HbtPairBacktester:
                 break
             if self.config.max_trades is not None and len(self.rows) >= self.config.max_trades:
                 break
-            if not hbt.advance(self.config.step_ns):
+            if not self._advance_strategy_clock(hbt):
                 break
             step += 1
 
@@ -121,6 +129,11 @@ class HbtPairBacktester:
             self._execute_signal(hbt, step, signal, market, pricing)
 
         self._record_final_market(hbt, step, last_market, last_pricing)
+
+    def _advance_strategy_clock(self, hbt: ExecutionEngine) -> bool:
+        if self.config.strategy_clock.strip().lower() == "event":
+            return hbt.advance_to_next_feed()
+        return hbt.advance(self.config.step_ns)
 
     def _run_numba(self, hbt: ExecutionEngine) -> None:
         self._validate_numba_strategy()
@@ -964,7 +977,12 @@ class HbtPairBacktester:
             "final_future_units": self.position.future_units,
             **self.resolved_tick_sizes,
             "first_leg": self.config.first_leg,
-            "step_ns": self.config.step_ns,
+            "strategy_clock": self.config.strategy_clock,
+            "step_ns": (
+                self.config.step_ns
+                if self.config.strategy_clock.strip().lower() == "step"
+                else None
+            ),
             "second_leg_delay_ns": self.config.second_leg_delay_ns,
             "post_first_feed_wait": self.config.post_first_feed_wait,
             "post_first_feed_timeout_ns": self.config.post_first_feed_timeout_ns,

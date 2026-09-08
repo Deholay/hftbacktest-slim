@@ -1,4 +1,4 @@
-"""Read package-owned compact ``bbo_v1`` partitions for native ABI version 1."""
+"""Read package-owned compact ``bbo_v1`` partitions for native ABI version 2."""
 
 from __future__ import annotations
 

@@ -328,6 +328,26 @@ impl SlimEngine {
         0
     }
 
+    pub(crate) fn advance_to_next_feed(&mut self) -> i32 {
+        if self
+            .assets
+            .iter()
+            .all(|asset| asset.local_cursor >= asset.local_order.len())
+        {
+            return 1;
+        }
+
+        while let Some(event) = self.next_event() {
+            let is_local_data = matches!(event.source, EventSource::LocalData { .. });
+            self.process_event(event);
+            if is_local_data {
+                return 0;
+            }
+        }
+
+        -1
+    }
+
     pub(crate) fn depth(&self, asset_no: usize) -> Option<BboView> {
         self.assets.get(asset_no).map(|asset| asset.local_view)
     }
@@ -467,5 +487,63 @@ mod tests {
         assert_eq!(value.wait_response(0, 1, 10), 0);
         assert_eq!(value.current_ts, 105);
         assert_eq!(value.assets[1].feed_latency, Some((105, 105)));
+    }
+
+    #[test]
+    fn advance_to_next_feed_stops_after_each_local_data_event() {
+        let config = AssetConfig {
+            local_adjustment_ns: 0,
+            feed_offset_ns: 0,
+            entry_latency_ns: 0,
+            response_latency_ns: 0,
+            tick_size: 1.0,
+        };
+        let mut value = SlimEngine::new(
+            [
+                vec![
+                    row(0, 100, 110, 99.0, 101.0, 1.0),
+                    row(1, 102, 112, 100.0, 102.0, 2.0),
+                ],
+                vec![row(0, 101, 111, 199.0, 201.0, 3.0)],
+            ],
+            [config, config],
+        );
+
+        assert_eq!(value.advance_to_next_feed(), 0);
+        assert_eq!(value.current_ts, 110);
+        assert_eq!(value.assets[0].local_view.bid_px, 99.0);
+        assert_eq!(value.assets[1].local_view.valid, 0);
+
+        assert_eq!(value.advance_to_next_feed(), 0);
+        assert_eq!(value.current_ts, 111);
+        assert_eq!(value.assets[1].local_view.bid_px, 199.0);
+
+        assert_eq!(value.advance_to_next_feed(), 0);
+        assert_eq!(value.current_ts, 112);
+        assert_eq!(value.assets[0].local_view.bid_px, 100.0);
+
+        assert_eq!(value.advance_to_next_feed(), 1);
+        assert_eq!(value.current_ts, 112);
+    }
+
+    #[test]
+    fn advance_to_next_feed_preserves_order_events_before_the_feed() {
+        let mut value = engine(
+            vec![
+                row(0, 100, 100, 99.0, 101.0, 1.0),
+                row(1, 110, 110, 100.0, 102.0, 1.0),
+            ],
+            5,
+            2,
+        );
+        value.process_through(100, None);
+        assert_eq!(value.submit(0, 1, 1, 101.0, 1.0, TIF_FOK), 0);
+
+        assert_eq!(value.advance_to_next_feed(), 0);
+        assert_eq!(value.current_ts, 110);
+        let order = value.orders[&(0, 1)];
+        assert_eq!(order.status, STATUS_FILLED);
+        assert_eq!(order.resp_local_ts, 107);
+        assert_eq!(order.response_visible, 1);
     }
 }

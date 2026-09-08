@@ -70,6 +70,40 @@ def test_two_asset_explicit_library_context_lifecycle_and_clock(
         engine.depth(0)
 
 
+def test_advance_to_next_feed_exposes_each_local_bbo_update(
+    tmp_path: Path, write_partition, native_library_path: Path
+) -> None:
+    left = write_partition(
+        tmp_path / "left_ticks.arrow",
+        [
+            (0, 100, 110, 99.0, 101.0, 1.0, 2.0, 100.0, 1),
+            (1, 102, 112, 100.0, 102.0, 3.0, 4.0, 101.0, 2),
+        ],
+    )
+    right = write_partition(
+        tmp_path / "right_ticks.arrow",
+        [(0, 101, 111, 199.0, 201.0, 5.0, 6.0, 200.0, 1)],
+    )
+    assets = [AssetConfig("A", left, 1.0), AssetConfig("B", right, 1.0)]
+
+    with SlimEngine(assets, library_path=native_library_path) as engine:
+        assert engine.advance_to_next_feed()
+        assert engine.current_timestamp == 110
+        assert engine.depth(0).best_bid == 99.0
+        assert not engine.depth(1).valid
+
+        assert engine.advance_to_next_feed()
+        assert engine.current_timestamp == 111
+        assert engine.depth(1).best_bid == 199.0
+
+        assert engine.advance_to_next_feed()
+        assert engine.current_timestamp == 112
+        assert engine.depth(0).best_bid == 100.0
+
+        assert not engine.advance_to_next_feed()
+        assert engine.current_timestamp == 112
+
+
 def test_engine_requires_exactly_two_neutral_assets(
     tmp_path: Path, write_partition, native_library_path: Path
 ) -> None:
@@ -94,10 +128,10 @@ def test_neutral_construction_preserves_typed_abi_mismatch(
     assets = _assets(tmp_path, write_partition)
 
     def mismatch(_path):
-        raise AbiMismatchError("expected 1, got 99")
+        raise AbiMismatchError("expected 2, got 99")
 
     monkeypatch.setattr(replay, "NativeBinding", mismatch)
-    with pytest.raises(AbiMismatchError, match="expected 1, got 99"):
+    with pytest.raises(AbiMismatchError, match="expected 2, got 99"):
         SlimEngine(assets, library_path=tmp_path / "wrong.so")
 
 

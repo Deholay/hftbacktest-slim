@@ -26,6 +26,7 @@ from arbitrage.full_market_runner import (
     prepare_future_events,
     resolve_output_dir,
     select_trade_dates,
+    strategy_clock_manifest,
     with_time_columns,
 )
 from arbitrage.hbt_helpers import hbt_asset_audit, infer_hbt_asset_tick_size
@@ -74,6 +75,7 @@ class FastPipelineTest(unittest.TestCase):
         self.assertEqual(args.min_future_volume, 100)
         self.assertEqual(args.min_stock_volume, 1_000_000)
         self.assertEqual(args.record_market_every_steps, 60)
+        self.assertEqual(args.strategy_clock, "step")
         self.assertEqual(args.strategy_engine, "numba")
         self.assertEqual(args.spot_input_csv_template, "")
         self.assertEqual(args.data_platform_base, "/mnt/z/數據平台")
@@ -84,6 +86,35 @@ class FastPipelineTest(unittest.TestCase):
         self.assertGreaterEqual(args.workers, 1)
         self.assertEqual(len(args.excluded_dates), 7)
         self.assertEqual(len(args.excluded_run_keys), 8)
+
+    def test_event_clock_requires_slim_and_uses_distinct_output_dir(self) -> None:
+        with self.assertRaises(SystemExit):
+            parse_args(["--strategy-clock", "event"])
+
+        args = parse_args(
+            [
+                "--engine",
+                "slim",
+                "--strategy-clock",
+                "event",
+                "--start-date",
+                "2026-09-07",
+                "--end-date",
+                "2026-09-07",
+            ]
+        )
+        self.assertEqual(args.market_data_cache, "compact")
+        self.assertTrue(resolve_output_dir(args).name.endswith("_clock_event"))
+        self.assertEqual(
+            strategy_clock_manifest(args),
+            {"kind": "event", "trigger": "local_feed"},
+        )
+
+        step_args = parse_args(["--step-ms", "250"])
+        self.assertEqual(
+            strategy_clock_manifest(step_args),
+            {"kind": "step_ms", "step_ms": 250.0},
+        )
 
     def test_full_report_requires_explicit_positive_row_budget(self) -> None:
         with self.assertRaises(SystemExit):
@@ -234,6 +265,14 @@ class FastPipelineTest(unittest.TestCase):
         self.assertEqual(config.spot.order_entry_latency_ns, 1_000_000)
         self.assertEqual(config.spot.order_response_latency_ns, 35_000_000)
         self.assertEqual(config.spot.feed_latency_offset_ns, 0)
+
+        event_args = parse_args(["--engine", "slim", "--strategy-clock", "event"])
+        event_config = build_pair_hbt_config(
+            event_args,
+            pair,
+            {"spot": Path("spot.arrow"), "future": Path("future.arrow")},
+        )
+        self.assertEqual(event_config.strategy_clock, "event")
 
     def test_tick_inference_and_audit_use_vectorized_min_price(self) -> None:
         data = np.zeros(3, dtype=EVENT_DTYPE)

@@ -14,6 +14,13 @@ This is an architectural extraction, not a matching or strategy semantic
 change. The migration must preserve existing market-data, scheduler, latency,
 order, fill, carry, capital, exclusion, persistence, and reporting behavior.
 
+Post-migration extension (2026-09-08): package `0.4.0`, Rust crate/engine
+`0.3.0`, and native ABI `2` add caller-controlled
+`advance_to_next_feed()`. The existing fixed-step clock remains the default;
+the futures/spot runner exposes the new behavior only through an explicit
+slim-only `event` clock identity. Compact schema `bbo_v1` and builder version
+`2` are unchanged.
+
 For package location, code ownership, public API, and dependency direction,
 this document supersedes older extraction locations in
 `HBT_ACCELERATION_STRATEGY.md`. That strategy document and `AGENTS.md` remain

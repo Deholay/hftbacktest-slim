@@ -241,7 +241,7 @@ def run_hbt(cli: argparse.Namespace) -> None:
             "spot_latency_ms": runner.leg_latency_ms(args, "spot"),
             "post_first_feed_wait": args.post_first_feed_wait,
             "report_mode": args.report_mode,
-            "strategy_clock_step_ms": args.step_ms,
+            "strategy_clock": runner.strategy_clock_manifest(args),
         },
         "host": host_info(),
     }

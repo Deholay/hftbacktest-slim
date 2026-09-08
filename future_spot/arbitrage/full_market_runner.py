@@ -281,6 +281,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--rebuild-compact-cache", action="store_true")
 
     parser.add_argument("--first-leg", choices=("stock", "future"), default="future")
+    parser.add_argument(
+        "--strategy-clock",
+        choices=("step", "event"),
+        default="step",
+        help=(
+            "Strategy wake-up mode: fixed --step-ms intervals, or every local "
+            "BBO feed event (slim engine only)."
+        ),
+    )
     parser.add_argument("--step-ms", type=float, default=1000.0)
     parser.add_argument(
         "--strategy-engine",
@@ -416,6 +425,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.engine == "slim":
         args.market_data_cache = "compact"
+    if args.strategy_clock == "event" and args.engine != "slim":
+        parser.error("--strategy-clock event requires --engine slim")
     if args.report_mode == "full" and (
         args.full_report_max_rows is None or args.full_report_max_rows <= 0
     ):
@@ -519,7 +530,12 @@ def resolve_output_dir(args: argparse.Namespace) -> Path:
                 f"order_{order_latency}ms_response_{response_latency}ms_"
                 f"feed_{feed_latency}ms"
             )
-    return PROJECT_ROOT / "output" / f"hbt_daily_full_market_{start}_{end}_{latency_suffix}"
+    clock_suffix = (
+        "_clock_event" if getattr(args, "strategy_clock", "step") == "event" else ""
+    )
+    return PROJECT_ROOT / "output" / (
+        f"hbt_daily_full_market_{start}_{end}_{latency_suffix}{clock_suffix}"
+    )
 
 
 def _output_name_number(value: float) -> str:
@@ -1071,8 +1087,7 @@ def run_backtests_with_position_carry(
                         if getattr(args, "market_data_cache", "event_npz") == "compact"
                         else None
                     ),
-                    "strategy_clock": "step_ms",
-                    "step_ms": getattr(args, "step_ms", None),
+                    "strategy_clock": strategy_clock_manifest(args),
                     "time_in_force_semantics": HBT_TIME_IN_FORCE_SEMANTICS,
                 },
                 replace_existing=bool(getattr(args, "rebuild_hbt_results", False)),
@@ -1942,6 +1957,7 @@ def summarize_asset(args: argparse.Namespace, record: DailyPairRecord, leg: str,
         "post_first_feed_wait": getattr(args, "post_first_feed_wait", "none"),
         "post_first_feed_timeout_ns": ms_to_ns(getattr(args, "post_first_feed_timeout_ms", 0.0)),
         "post_first_feed_poll_ns": ms_to_ns(getattr(args, "post_first_feed_poll_ms", 10.0)),
+        "strategy_clock": getattr(args, "strategy_clock", "step"),
         "queue_model": hbt_config.queue_model,
         "rows": summary["rows"],
         "first_exch_ts": summary["first_exch_ts"],
@@ -2213,7 +2229,7 @@ def hbt_result_csvs_exist(output_dir: Path) -> bool:
     return all(paths[name].exists() for name in required)
 
 
-HBT_CACHE_SCHEMA_VERSION = 8
+HBT_CACHE_SCHEMA_VERSION = 9
 HBT_MANIFEST_NAME = "backtest_manifest.json"
 REFERENCE_ENGINE_VERSION = "reference-v1"
 HBT_RESULT_ARG_NAMES = (
@@ -2234,6 +2250,7 @@ HBT_RESULT_ARG_NAMES = (
     "compact_cache_compression",
     "compact_cache_profile",
     "first_leg",
+    "strategy_clock",
     "step_ms",
     "strategy_engine",
     "order_latency_ms",
@@ -2372,12 +2389,17 @@ def hbt_manifest_payload(args: argparse.Namespace, records: list[DailyPairRecord
             },
             key=str,
         )
+    arguments = {
+        name: _json_value(getattr(args, name, None)) for name in HBT_RESULT_ARG_NAMES
+    }
+    if getattr(args, "strategy_clock", "step") == "event":
+        arguments["step_ms"] = None
     return {
         "schema_version": HBT_CACHE_SCHEMA_VERSION,
         "engine": getattr(args, "engine", "reference"),
         "engine_version": execution_engine_version(args),
-        "execution_port": "future-spot-execution-port-v1",
-        "execution_adapter": f"{getattr(args, 'engine', 'reference')}-v1",
+        "execution_port": "future-spot-execution-port-v2",
+        "execution_adapter": f"{getattr(args, 'engine', 'reference')}-v2",
         "compact_schema_version": (
             COMPACT_SCHEMA_VERSION
             if getattr(args, "market_data_cache", "event_npz") == "compact"
@@ -2389,12 +2411,9 @@ def hbt_manifest_payload(args: argparse.Namespace, records: list[DailyPairRecord
             else None
         ),
         "daily_result_schema_version": DAILY_RESULT_SCHEMA_VERSION,
-        "strategy_clock": {
-            "kind": "step_ms",
-            "step_ms": _json_value(getattr(args, "step_ms", None)),
-        },
+        "strategy_clock": strategy_clock_manifest(args),
         "time_in_force_semantics": HBT_TIME_IN_FORCE_SEMANTICS,
-        "arguments": {name: _json_value(getattr(args, name, None)) for name in HBT_RESULT_ARG_NAMES},
+        "arguments": arguments,
         "run_keys": [record.run_key for record in records],
         "daily_configs": [_content_fingerprint(path) for path in config_paths],
         "event_files": [_stat_fingerprint(path) for path in event_paths],
@@ -2404,6 +2423,15 @@ def hbt_manifest_payload(args: argparse.Namespace, records: list[DailyPairRecord
                 getattr(args, "market_data_cache", "event_npz"),
             )
         ),
+    }
+
+
+def strategy_clock_manifest(args: argparse.Namespace) -> dict[str, Any]:
+    if getattr(args, "strategy_clock", "step") == "event":
+        return {"kind": "event", "trigger": "local_feed"}
+    return {
+        "kind": "step_ms",
+        "step_ms": _json_value(getattr(args, "step_ms", None)),
     }
 
 
@@ -2571,6 +2599,7 @@ def build_pair_hbt_config(
             queue_model=args.queue_model,
         ),
         first_leg=args.first_leg,
+        strategy_clock=getattr(args, "strategy_clock", "step"),
         step_ns=ms_to_ns(args.step_ms),
         response_timeout_ns=ms_to_ns(args.response_timeout_ms),
         second_leg_delay_ns=ms_to_ns(args.second_leg_delay_ms),
