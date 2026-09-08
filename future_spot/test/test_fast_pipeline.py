@@ -26,6 +26,7 @@ from arbitrage.full_market_runner import (
     prepare_future_events,
     resolve_output_dir,
     select_trade_dates,
+    with_time_columns,
 )
 from arbitrage.hbt_helpers import hbt_asset_audit, infer_hbt_asset_tick_size
 from arbitrage.models import PairConfig
@@ -44,10 +45,34 @@ EVENT_DTYPE = np.dtype(
 
 
 class FastPipelineTest(unittest.TestCase):
-    def test_fast_defaults_use_1325_and_sample_market(self) -> None:
+    def test_timestamp_columns_include_readable_taipei_time(self) -> None:
+        timestamp = 1_788_318_898_172_000_000
+        frame = pd.DataFrame(
+            {
+                "timestamp": pd.Series([timestamp, None], dtype=object),
+                "local_ts": pd.Series([timestamp + 1_000_000, None], dtype=object),
+            }
+        )
+
+        result = with_time_columns(frame)
+        result = with_time_columns(result, "local_ts")
+
+        self.assertEqual(
+            result.columns.tolist(),
+            ["timestamp", "timestamp_tw", "local_ts", "local_ts_tw", "time"],
+        )
+        self.assertEqual(str(result.loc[0, "timestamp_tw"]), "2026-09-02 11:14:58.172000+08:00")
+        self.assertEqual(str(result.loc[0, "local_ts_tw"]), "2026-09-02 11:14:58.173000+08:00")
+        self.assertEqual(result.loc[0, "time"], result.loc[0, "local_ts_tw"])
+        self.assertTrue(pd.isna(result.loc[1, "timestamp_tw"]))
+        self.assertTrue(pd.isna(result.loc[1, "local_ts_tw"]))
+
+    def test_fast_defaults_use_attached_target_filter_and_sample_market(self) -> None:
         args = parse_args([])
         self.assertEqual(args.session_end, "13:25:00")
-        self.assertEqual(args.build_session_end, "13:25:00")
+        self.assertEqual(args.build_session_end, "13:45:00")
+        self.assertEqual(args.min_future_volume, 100)
+        self.assertEqual(args.min_stock_volume, 1_000_000)
         self.assertEqual(args.record_market_every_steps, 60)
         self.assertEqual(args.strategy_engine, "numba")
         self.assertEqual(args.spot_input_csv_template, "")

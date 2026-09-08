@@ -41,19 +41,19 @@ DETAILED_REPORTS = {
 
 TRADE_REPORT_COLUMNS = {
     "trade_date", "run_key", "pair_name", "spot_symbol", "future_symbol",
-    "timestamp", "completion_timestamp", "step", "signal", "status", "failure_reason",
+    "timestamp", "timestamp_tw", "completion_timestamp", "step", "signal", "status", "failure_reason",
     "first_leg", "first_side", "first_exec_price", "first_exec_qty",
     "second_leg", "second_side", "second_exec_price", "second_exec_qty",
     "flatten_leg", "flatten_side", "flatten_exec_price", "flatten_exec_qty",
     "flatten_filled", "realized_pnl", "position_quantity",
 }
 MARKET_LATEST_COLUMNS = {
-    "run_key", "timestamp", "spot_bid", "spot_ask", "future_bid", "future_ask",
+    "run_key", "timestamp", "timestamp_tw", "spot_bid", "spot_ask", "future_bid", "future_ask",
 }
 LATENCY_REPORT_COLUMNS = {
     "pair_name", "event_type", "leg", "side", "spot_feed_latency_ns",
     "future_feed_latency_ns", "order_entry_latency_ns", "order_response_latency_ns",
-    "local_ts", "spot_exch_ts", "future_exch_ts",
+    "timestamp_tw", "local_ts", "local_ts_tw", "spot_exch_ts", "future_exch_ts",
 }
 
 

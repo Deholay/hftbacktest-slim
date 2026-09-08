@@ -30,6 +30,11 @@ from arbitrage.utils import (  # noqa: E402
 
 PRODUCT_KEYS = {"name", "spot_symbol", "future_symbol"}
 MONTH_CODES = {code: index for index, code in enumerate("ABCDEFGHIJKL", start=1)}
+DEFAULT_BUILD_SESSION_START = "08:45:00"
+DEFAULT_BUILD_SESSION_END = "13:45:00"
+DEFAULT_MIN_FUTURE_VOLUME = 100
+DEFAULT_MIN_STOCK_VOLUME = 1_000_000
+DEFAULT_REQUIRED_UNIT = 2000
 
 
 @dataclass
@@ -105,30 +110,30 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--session-start",
-        default="08:45:00",
+        default=DEFAULT_BUILD_SESSION_START,
         help="Futures session start time for target volume calculation.",
     )
     parser.add_argument(
         "--session-end",
-        default="13:25:00",
+        default=DEFAULT_BUILD_SESSION_END,
         help="Futures session end time for target volume calculation.",
     )
     parser.add_argument(
         "--min-future-volume",
         type=int,
-        default=1000,
+        default=DEFAULT_MIN_FUTURE_VOLUME,
         help="Minimum futures total_volume.",
     )
     parser.add_argument(
         "--min-stock-volume",
         type=int,
-        default=20_000_000,
+        default=DEFAULT_MIN_STOCK_VOLUME,
         help="Minimum underlying stock volume on LDate.",
     )
     parser.add_argument(
         "--required-unit",
         type=int,
-        default=2000,
+        default=DEFAULT_REQUIRED_UNIT,
         help="Required stock futures contract unit. Default keeps regular 2000-share contracts.",
     )
     parser.add_argument(
@@ -206,11 +211,11 @@ def build_arbitrage_config_from_date(
     tpex_daytrade_template: str = r"Z:\TPEX\瘥??瘜{date_nodash}.csv",
     twse_daily_template: str = r"Z:\TWSE\瘥鞈?\{ldate_nodash}.ftr",
     tpex_daily_template: str = r"Z:\TPEX\瘥鞈?\{ldate_nodash}.ftr",
-    session_start: str = "08:45:00",
-    session_end: str = "13:25:00",
-    min_future_volume: int = 1000,
-    min_stock_volume: int = 20_000_000,
-    required_unit: int = 2000,
+    session_start: str = DEFAULT_BUILD_SESSION_START,
+    session_end: str = DEFAULT_BUILD_SESSION_END,
+    min_future_volume: int = DEFAULT_MIN_FUTURE_VOLUME,
+    min_stock_volume: int = DEFAULT_MIN_STOCK_VOLUME,
+    required_unit: int = DEFAULT_REQUIRED_UNIT,
     output: str | Path | None = None,
     target_output: str | Path | None = r"output\target_futures.csv",
     name_template: str = "{spot_symbol}_{future_symbol}",

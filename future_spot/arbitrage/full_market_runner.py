@@ -91,6 +91,11 @@ from arbitrage.position_carry import (  # noqa: E402
 )
 from build_arbitrage_config_from_date import (  # noqa: E402
     BuildArbitrageConfigResult,
+    DEFAULT_BUILD_SESSION_END,
+    DEFAULT_BUILD_SESSION_START,
+    DEFAULT_MIN_FUTURE_VOLUME,
+    DEFAULT_MIN_STOCK_VOLUME,
+    DEFAULT_REQUIRED_UNIT,
     build_arbitrage_config_from_date,
     format_template as format_daily_template,
     get_ldate as get_calendar_ldate,
@@ -206,11 +211,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--tpex-daytrade-template", default=DEFAULT_TPEX_DAYTRADE_TEMPLATE)
     parser.add_argument("--twse-daily-template", default=DEFAULT_TWSE_DAILY_TEMPLATE)
     parser.add_argument("--tpex-daily-template", default=DEFAULT_TPEX_DAILY_TEMPLATE)
-    parser.add_argument("--build-session-start", default="08:45:00")
-    parser.add_argument("--build-session-end", default="13:25:00")
-    parser.add_argument("--min-future-volume", type=int, default=1000)
-    parser.add_argument("--min-stock-volume", type=int, default=20_000_000)
-    parser.add_argument("--required-unit", type=int, default=2000)
+    parser.add_argument("--build-session-start", default=DEFAULT_BUILD_SESSION_START)
+    parser.add_argument("--build-session-end", default=DEFAULT_BUILD_SESSION_END)
+    parser.add_argument("--min-future-volume", type=int, default=DEFAULT_MIN_FUTURE_VOLUME)
+    parser.add_argument("--min-stock-volume", type=int, default=DEFAULT_MIN_STOCK_VOLUME)
+    parser.add_argument("--required-unit", type=int, default=DEFAULT_REQUIRED_UNIT)
     parser.add_argument("--name-template", default="{spot_symbol}_{future_symbol}")
     parser.add_argument("--rebuild-daily-configs", action="store_true")
 
@@ -2161,6 +2166,7 @@ def _run_single_pair_backtest(
     latency = backtester.latency_frame()
     trades = add_run_columns(add_execution_latency_columns(with_time_columns(trades)), record)
     market = add_run_columns(attach_entry_signals(with_time_columns(market), config.pair), record)
+    latency = with_time_columns(latency)
     latency = add_run_columns(with_time_columns(latency, "local_ts"), record)
     summary = add_run_columns(summary, record)
     return {"trades": trades, "summary": summary, "market": market, "latency": latency}
@@ -2207,7 +2213,7 @@ def hbt_result_csvs_exist(output_dir: Path) -> bool:
     return all(paths[name].exists() for name in required)
 
 
-HBT_CACHE_SCHEMA_VERSION = 7
+HBT_CACHE_SCHEMA_VERSION = 8
 HBT_MANIFEST_NAME = "backtest_manifest.json"
 REFERENCE_ENGINE_VERSION = "reference-v1"
 HBT_RESULT_ARG_NAMES = (
@@ -2215,6 +2221,12 @@ HBT_RESULT_ARG_NAMES = (
     "end_date",
     "excluded_dates",
     "excluded_run_keys",
+    "build_session_start",
+    "build_session_end",
+    "min_future_volume",
+    "min_stock_volume",
+    "required_unit",
+    "name_template",
     "session_start",
     "session_end",
     "engine",
@@ -2596,7 +2608,25 @@ def with_time_columns(df: pd.DataFrame, timestamp_col: str = "timestamp") -> pd.
     if df.empty or timestamp_col not in df.columns:
         return df
     result = df.copy()
-    result["time"] = pd.to_datetime(result[timestamp_col], unit="ns", utc=True).dt.tz_convert("Asia/Taipei")
+    readable_col = f"{timestamp_col}_tw"
+    timestamp_ns = pd.Series(
+        pd.array(result[timestamp_col], dtype="Int64"),
+        index=result.index,
+    )
+    readable_time = pd.to_datetime(
+        timestamp_ns,
+        unit="ns",
+        utc=True,
+        errors="coerce",
+    ).dt.tz_convert("Asia/Taipei")
+    if readable_col in result.columns:
+        result[readable_col] = readable_time
+    else:
+        timestamp_index = result.columns.get_loc(timestamp_col)
+        result.insert(timestamp_index + 1, readable_col, readable_time)
+    # Keep the historical report-facing alias. For latency rows this remains
+    # the readable local event time because local_ts is converted last.
+    result["time"] = readable_time
     return result
 
 

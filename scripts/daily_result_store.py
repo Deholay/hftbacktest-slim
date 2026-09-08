@@ -19,7 +19,7 @@ import pandas as pd
 from .io_utils import write_parquet
 
 
-DAILY_RESULT_SCHEMA_VERSION = 1
+DAILY_RESULT_SCHEMA_VERSION = 2
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 

@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from scripts.daily_result_store import (
+    DAILY_RESULT_SCHEMA_VERSION,
     DailyResultConflictError,
     DailyResultStore,
     DailyResultStoreError,
@@ -70,7 +71,9 @@ class DailyResultStoreTest(unittest.TestCase):
             date_path = store.date_path("2026-03-02")
             date_path.mkdir(parents=True)
             (date_path / "manifest.json").write_text(
-                json.dumps({"schema_version": 1, "build_complete": False}),
+                json.dumps(
+                    {"schema_version": DAILY_RESULT_SCHEMA_VERSION, "build_complete": False}
+                ),
                 encoding="utf-8",
             )
             with self.assertRaises(DailyResultStoreError):
