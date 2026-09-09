@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import Future
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -374,6 +375,31 @@ class PersistentExecutorTest(unittest.TestCase):
         totals = sorted(sum(item[2] for item in shard) for shard in shards)
 
         self.assertEqual(totals, [90, 90])
+
+    def test_balanced_shards_keep_future_months_for_one_spot_together(self) -> None:
+        first = replace(_pair("first"), spot_symbol="S", future_symbol="F1")
+        second = replace(_pair("second"), spot_symbol="S", future_symbol="F2")
+        other = _pair("other")
+        records = [
+            DailyPairRecord("2026-09-09", f"2026-09-09::{pair.name}", pair, Path(f"{pair.name}.json"))
+            for pair in (first, second, other)
+        ]
+        runnable = [
+            (
+                record,
+                {"spot": Path(f"{record.pair.name}-s"), "future": Path(f"{record.pair.name}-f")},
+            )
+            for record in records
+        ]
+
+        shards = balanced_backtest_shards(runnable, 2)
+        shard_by_run_key = {
+            item[0].run_key: shard_index
+            for shard_index, shard in enumerate(shards)
+            for item in shard
+        }
+
+        assert shard_by_run_key[records[0].run_key] == shard_by_run_key[records[1].run_key]
 
 
 if __name__ == "__main__":

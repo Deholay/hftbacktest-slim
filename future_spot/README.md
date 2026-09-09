@@ -153,15 +153,23 @@ and must not be used as raw-market lookup keys.
 
 ### Daily run with Lark notification (Windows/WSL)
 
-`future_spot/scripts/run_daily_backtest_to_lark.bat` runs the daily report mode
-inside WSL, saves the CSV under
-`Z:\hftbacktest_daily_reports\YYYYMMDD\daily_backtest_summary.csv`, and sends a
-signed summary message to a Lark custom bot. The default date is the latest
-eligible trading date in `Calendar.csv`; an explicit date can be passed as the
-first argument:
+`future_spot/scripts/run_daily_backtest_to_lark.bat` runs a one-date backtest
+inside WSL using the notebook's Slim/event-clock execution settings with
+`report_mode=daily`. It saves each run under the repository at
+`future_spot/output/daily_lark/YYYYMMDD/` and sends a signed summary message to
+a Lark custom bot. The batch file only launches the Python
+entrypoint and forwards its arguments unchanged. Without `--trade-date`, the
+runner selects the most recent eligible trading date strictly before today in
+Taipei (Monday therefore selects the previous Friday). An explicit date and
+credentials can be passed with the Python option names:
+
+The Daily Lark profile submits the second leg immediately after the first-leg
+response and applies a 1 ms successful-entry cooldown shared by every futures
+month with the same spot symbol. Shared cooldown execution requires the Slim
+event clock; blocked entries remain auditable as `RISK_SKIP` rows.
 
 ```bat
-future_spot\scripts\run_daily_backtest_to_lark.bat 2026-09-08
+future_spot\scripts\run_daily_backtest_to_lark.bat --trade-date 2026-09-08 --webhook-url "https://open.larksuite.com/open-apis/bot/v2/hook/REPLACE_ME" --webhook-secret "REPLACE_ME"
 ```
 
 Keep the webhook credentials out of the repository and command file. Set them
@@ -173,11 +181,10 @@ setx LARK_WEBHOOK_URL "PASTE_NEW_LARK_WEBHOOK_URL_HERE"
 setx LARK_WEBHOOK_SECRET "PASTE_NEW_LARK_SIGNING_SECRET_HERE"
 ```
 
-The batch file transfers those variables into WSL through `WSLENV`; it does not
-place them in the Python child command. The Python entrypoint also accepts
-`--webhook-url` and `--webhook-secret` for a one-off manual invocation, but
-environment variables are preferred because command-line arguments can be
-visible in process listings.
+The Python entrypoint also accepts credentials from `LARK_WEBHOOK_URL` and
+`LARK_WEBHOOK_SECRET`. Environment variables are preferred because command-line
+arguments can be visible in process listings; when launching through WSL, make
+those variables available to the Linux environment before relying on them.
 
 A custom-bot webhook cannot upload an arbitrary CSV attachment. It sends the
 FILLED count, BBO, full raw tick timestamps, and the saved CSV path. Sending the

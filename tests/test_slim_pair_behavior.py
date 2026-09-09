@@ -9,6 +9,7 @@ import pytest
 
 from future_spot.arbitrage.hbt_backtest import HbtPairBacktester
 from future_spot.arbitrage.hbt_types import HbtPairBacktestConfig
+from future_spot.arbitrage.full_market_runner import DailyPairRecord, parse_args, run_backtests
 from future_spot.arbitrage.models import PairConfig
 from hftbacktest_slim import BBO_SCHEMA
 from scripts.hbt_types import HbtAssetConfig
@@ -103,6 +104,67 @@ def _run(
 
 INITIAL_SPOT = [(0, 100, 110, 99.0, 100.0, 10.0, 10.0, 100.0, 1)]
 INITIAL_FUTURE = [(0, 100, 110, 110.0, 111.0, 10.0, 10.0, 110.0, 1)]
+
+
+def test_shared_spot_cooldown_is_enforced_across_future_months(tmp_path: Path) -> None:
+    base = 1_000_000_000
+    spot = _write(
+        tmp_path / "spot.arrow",
+        [(0, base + 99, base + 100, 99.0, 100.0, 10.0, 10.0, 100.0, 1)],
+    )
+    future_one = _write(
+        tmp_path / "future_one.arrow",
+        [(0, base + 99, base + 100, 110.0, 111.0, 10.0, 10.0, 110.0, 1)],
+    )
+    future_two = _write(
+        tmp_path / "future_two.arrow",
+        [
+            (0, base + 99, base + 100, 110.0, 111.0, 10.0, 10.0, 110.0, 1),
+            (1, base + 500_099, base + 500_100, 110.0, 111.0, 10.0, 10.0, 110.0, 2),
+            (2, base + 1_000_099, base + 1_000_100, 110.0, 111.0, 10.0, 10.0, 110.0, 3),
+        ],
+    )
+    pair_one = _pair(name="S_F1", spot_symbol="S", future_symbol="F1")
+    pair_two = _pair(name="S_F2", spot_symbol="S", future_symbol="F2")
+    records = [
+        DailyPairRecord("2026-09-09", "2026-09-09::S_F1", pair_one, tmp_path / "one.json"),
+        DailyPairRecord("2026-09-09", "2026-09-09::S_F2", pair_two, tmp_path / "two.json"),
+    ]
+    paths = {
+        records[0].run_key: {"spot": spot, "future": future_one},
+        records[1].run_key: {"spot": spot, "future": future_two},
+    }
+    args = parse_args(
+        [
+            "--engine",
+            "slim",
+            "--strategy-clock",
+            "event",
+            "--min-entry-interval-sec",
+            "0.001",
+            "--workers",
+            "1",
+            "--record-market-every-steps",
+            "0",
+            "--post-first-feed-wait",
+            "none",
+        ]
+    )
+
+    results, _, trades, _, _, errors = run_backtests(args, records, paths)
+
+    assert errors.empty
+    assert set(results) == {record.run_key for record in records}
+    filled = trades.loc[trades["status"].eq("FILLED")]
+    assert filled.groupby("run_key").size().to_dict() == {
+        "2026-09-09::S_F1": 1,
+        "2026-09-09::S_F2": 1,
+    }
+    second = trades.loc[trades["run_key"].eq("2026-09-09::S_F2")]
+    blocked = second.loc[second["status"].eq("RISK_SKIP")]
+    assert len(blocked) == 2
+    assert blocked["failure_reason"].str.contains("shared spot entry interval").all()
+    assert int(filled.loc[filled["run_key"].eq("2026-09-09::S_F2"), "signal_timestamp"].iloc[0]) == base + 1_000_100
 
 
 def test_crossing_legs_preserve_sequence_position_and_audit_rows(tmp_path: Path) -> None:

@@ -1,4 +1,4 @@
-"""Run one opportunity-only backtest date and notify a Lark custom bot."""
+"""Run one notebook-profile backtest date and notify a Lark custom bot."""
 
 from __future__ import annotations
 
@@ -25,9 +25,31 @@ WORKSPACE_ROOT = PROJECT_ROOT.parent
 BACKTEST_ENTRYPOINT = PROJECT_ROOT / "test" / "run_full_backtest.py"
 DEFAULT_CALENDAR = PROJECT_ROOT / "Calendar.csv"
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "output" / "daily_lark"
+DEFAULT_COMPACT_CACHE_ROOT = WORKSPACE_ROOT / "notebooks" / "output" / "compact_bbo_v2"
 
-# Match the observed per-leg OMS latency settings used by the project notebook.
-DEFAULT_BACKTEST_ARGS = (
+# Keep market-data, matching, clock, latency, and capital settings aligned with
+# notebooks/hbt_pair_backtest_visualization.ipynb. The notification workflow
+# intentionally selects daily reporting and submits the second leg immediately
+# after the first response without waiting for another feed update.
+DAILY_LARK_BACKTEST_ARGS = (
+    "--engine",
+    "slim",
+    "--strategy-clock",
+    "event",
+    "--market-data-cache",
+    "compact",
+    "--compact-cache-root",
+    str(DEFAULT_COMPACT_CACHE_ROOT),
+    "--compact-cache-compression",
+    "lz4",
+    "--carry-positions",
+    "--total-capital",
+    "50000000",
+    "--futures-margin-rate",
+    "0.20",
+    "--spot-equity-rate",
+    "0.40",
+    "--no-leverage",
     "--future-order-latency-ms",
     "0",
     "--future-response-latency-ms",
@@ -41,11 +63,18 @@ DEFAULT_BACKTEST_ARGS = (
     "--spot-feed-latency-offset-ms",
     "0",
     "--post-first-feed-wait",
-    "spot",
-    "--post-first-feed-timeout-ms",
-    "5000",
-    "--post-first-feed-poll-ms",
-    "10",
+    "none",
+    "--min-entry-interval-sec",
+    "0.001",
+    "--record-market-every-steps",
+    "60",
+    "--low-memory-reports",
+    "--report-mode",
+    "daily",
+    "--report-chunk-rows",
+    "25000",
+    "--event-futures-parquet-dir",
+    "/mnt/z/ticks_parquet_stock_future",
 )
 
 
@@ -88,7 +117,7 @@ def choose_trade_date(
     today: date | None = None,
     excluded_dates: Iterable[str] = KNOWN_BAD_TRADE_DATES,
 ) -> str:
-    """Choose an explicit date or the latest eligible Taiwan trade date."""
+    """Choose an explicit date or the previous eligible Taiwan trade date."""
     dates = calendar_trade_dates(calendar_path)
     excluded = {_parse_iso_date(value, field="excluded date") for value in excluded_dates}
     eligible = [value for value in dates if value not in excluded]
@@ -101,9 +130,9 @@ def choose_trade_date(
         return selected.isoformat()
 
     cutoff = today or datetime.now(ZoneInfo("Asia/Taipei")).date()
-    candidates = [value for value in eligible if value <= cutoff]
+    candidates = [value for value in eligible if value < cutoff]
     if not candidates:
-        raise DailyLarkError(f"calendar has no eligible trade date on or before {cutoff}")
+        raise DailyLarkError(f"calendar has no eligible trade date before {cutoff}")
     return candidates[-1].isoformat()
 
 
@@ -112,38 +141,81 @@ def build_backtest_command(
     python: str,
     trade_date: str,
     output_dir: Path,
-    extra_args: Sequence[str] = (),
 ) -> list[str]:
-    """Build a daily-only command, with invariant arguments placed last."""
+    """Build a one-date command using the notebook's invariant profile."""
     return [
         python,
         str(BACKTEST_ENTRYPOINT),
-        *DEFAULT_BACKTEST_ARGS,
-        *extra_args,
+        *DAILY_LARK_BACKTEST_ARGS,
         "--start-date",
         trade_date,
         "--end-date",
         trade_date,
-        "--report-mode",
-        "daily",
         "--output-dir",
         str(output_dir),
     ]
+
+
+def write_daily_summary_from_trades(trades_path: Path, csv_path: Path) -> None:
+    """Write the Lark opportunity CSV from a summary-mode trade audit."""
+    try:
+        with trades_path.open("r", encoding="utf-8-sig", newline="") as source:
+            reader = csv.DictReader(source)
+            _normalize_reader_fieldnames(reader, source=trades_path)
+            actual = set(reader.fieldnames or ())
+            required = (*DAILY_BACKTEST_SUMMARY_COLUMNS, "status")
+            missing = [name for name in required if name not in actual]
+            if missing:
+                raise DailyLarkError(
+                    f"summary trade output is missing required columns: {', '.join(missing)}"
+                )
+            csv_path.parent.mkdir(parents=True, exist_ok=True)
+            with csv_path.open("w", encoding="utf-8", newline="") as target:
+                writer = csv.DictWriter(target, fieldnames=DAILY_BACKTEST_SUMMARY_COLUMNS)
+                writer.writeheader()
+                for row in reader:
+                    normalized = _strip_row_values(row)
+                    if normalized.get("status") == "FILLED":
+                        writer.writerow(
+                            {
+                                name: normalized.get(name, "")
+                                for name in DAILY_BACKTEST_SUMMARY_COLUMNS
+                            }
+                        )
+    except OSError as exc:
+        raise DailyLarkError(f"cannot build daily summary from {trades_path}: {exc}") from exc
 
 
 def read_daily_summary(csv_path: Path) -> list[dict[str, str]]:
     try:
         with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
+            _normalize_reader_fieldnames(reader, source=csv_path)
             actual = set(reader.fieldnames or ())
             missing = [name for name in DAILY_BACKTEST_SUMMARY_COLUMNS if name not in actual]
             if missing:
                 raise DailyLarkError(
                     f"daily summary is missing required columns: {', '.join(missing)}"
                 )
-            return list(reader)
+            return [_strip_row_values(row) for row in reader]
     except OSError as exc:
         raise DailyLarkError(f"cannot read daily summary: {csv_path}: {exc}") from exc
+
+
+def _normalize_reader_fieldnames(reader: csv.DictReader, *, source: Path) -> None:
+    original = reader.fieldnames or []
+    normalized = [name.strip() for name in original]
+    if len(normalized) != len(set(normalized)):
+        raise DailyLarkError(f"CSV contains duplicate columns after trimming whitespace: {source}")
+    reader.fieldnames = normalized
+
+
+def _strip_row_values(row: Mapping[str, str | None]) -> dict[str, str]:
+    return {
+        key: "" if value is None else value.strip()
+        for key, value in row.items()
+        if key is not None
+    }
 
 
 def windows_display_path(path: Path) -> str:
@@ -176,17 +248,17 @@ def format_success_message(
     lines.append("機會摘要：")
     for index, row in enumerate(rows[:max_rows], start=1):
         lines.append(
-            "{index}. {time} | {signal} | 現貨 bid/ask={spot_bid}/{spot_ask} "
-            "tick={spot_tick} | 期貨 bid/ask={future_bid}/{future_ask} tick={future_tick}".format(
+            "{index}. {run_key} | {time} | {signal} | "
+            "現貨 bid/ask={spot_bid}/{spot_ask} | "
+            "期貨 bid/ask={future_bid}/{future_ask}".format(
                 index=index,
+                run_key=row.get("run_key", ""),
                 time=row.get("timestamp_tw", ""),
                 signal=row.get("signal", ""),
                 spot_bid=row.get("spot_bid", ""),
                 spot_ask=row.get("spot_ask", ""),
-                spot_tick=row.get("spot_tick_exch_timestamp", ""),
                 future_bid=row.get("future_bid", ""),
                 future_ask=row.get("future_ask", ""),
-                future_tick=row.get("future_tick_exch_timestamp", ""),
             )
         )
     omitted = len(rows) - max_rows
@@ -259,12 +331,12 @@ def _notify_failure(webhook_url: str, webhook_secret: str, message: str) -> None
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run one opportunity-only futures/spot backtest date and notify Lark."
+        description="Run one notebook-profile futures/spot backtest date and notify Lark."
     )
     parser.add_argument(
         "--trade-date",
         default=os.environ.get("DAILY_BACKTEST_DATE") or None,
-        help="YYYY-MM-DD; default is the latest eligible Taiwan trade date.",
+        help="YYYY-MM-DD; default is the previous eligible Taiwan trade date.",
     )
     parser.add_argument("--calendar", type=Path, default=DEFAULT_CALENDAR)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
@@ -272,16 +344,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--python", default=sys.executable, help=argparse.SUPPRESS)
     parser.add_argument("--webhook-url", default=None)
     parser.add_argument("--webhook-secret", default=None)
-    parser.add_argument(
-        "backtest_args",
-        nargs=argparse.REMAINDER,
-        help="Additional backtest options after --; daily/date/output settings remain enforced.",
-    )
     args = parser.parse_args(argv)
     if args.max_message_rows < 1:
         parser.error("--max-message-rows must be positive")
-    if args.backtest_args[:1] == ["--"]:
-        args.backtest_args = args.backtest_args[1:]
     return args
 
 
@@ -305,11 +370,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     output_dir = (args.output_root / trade_date.replace("-", "")).resolve()
     csv_path = output_dir / "daily_backtest_summary.csv"
+    trades_path = output_dir / "trades_all_daily_pairs.csv"
     command = build_backtest_command(
         python=args.python,
         trade_date=trade_date,
         output_dir=output_dir,
-        extra_args=args.backtest_args,
     )
     print(f"Running daily backtest for {trade_date}; output={output_dir}")
     try:
@@ -328,6 +393,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return completed.returncode or 1
 
     try:
+        if not csv_path.is_file():
+            write_daily_summary_from_trades(trades_path, csv_path)
         rows = read_daily_summary(csv_path)
         message = format_success_message(
             trade_date,
@@ -354,4 +421,5 @@ __all__ = [
     "read_daily_summary",
     "send_lark_text",
     "windows_display_path",
+    "write_daily_summary_from_trades",
 ]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
@@ -52,6 +53,16 @@ from .ticks import pair_leg_tick_size
 from .utils import exit_quantity_multiplier
 
 
+@dataclass(frozen=True)
+class CoordinatedEvent:
+    """One pending event-clock decision exposed to a spot-group coordinator."""
+
+    timestamp_ns: int
+    signal: Signal
+    should_execute: bool
+    reason: str
+
+
 class HbtPairBacktester:
     def __init__(
         self,
@@ -72,6 +83,121 @@ class HbtPairBacktester:
         self.resolved_tick_sizes: dict[str, float] = {}
         self.scan_calls = 0
         self.python_decisions = 0
+
+    def open_coordinated_event_session(self) -> CoordinatedEvent | None:
+        """Open a slim/event replay and stop at its first strategy event."""
+        if self.config.strategy_clock.strip().lower() != "event":
+            raise ValueError("coordinated pair replay requires strategy_clock='event'")
+        if self.config.execution_engine.strip().lower() != "slim":
+            raise ValueError("coordinated pair replay requires execution_engine='slim'")
+        if self._custom_strategy or not isinstance(self.strategy, FutureSpotPairStrategy):
+            raise ValueError("coordinated pair replay currently supports only the default strategy")
+        self._coordinated_hbt = self._build_execution_engine()
+        self._coordinated_step = 0
+        self._coordinated_pending = None
+        self._coordinated_last_market = None
+        self._coordinated_last_pricing = None
+        return self.advance_coordinated_event_session()
+
+    def advance_coordinated_event_session(self) -> CoordinatedEvent | None:
+        """Advance exactly one local feed event and expose its pending decision."""
+        if getattr(self, "_coordinated_pending", None) is not None:
+            raise RuntimeError("resolve the pending coordinated event before advancing")
+        hbt = self._coordinated_hbt
+        if self.config.max_steps is not None and self._coordinated_step >= self.config.max_steps:
+            return None
+        if self.config.max_trades is not None and len(self.rows) >= self.config.max_trades:
+            return None
+        if not hbt.advance_to_next_feed():
+            return None
+
+        self._coordinated_step += 1
+        market = self._current_market(hbt)
+        if market is None:
+            event = CoordinatedEvent(int(hbt.current_timestamp), Signal.HOLD, False, "market unavailable")
+            self._coordinated_pending = (event, None, None, None)
+            return event
+
+        pricing = self.pricer.price(market)
+        self._coordinated_last_market = market
+        self._coordinated_last_pricing = pricing
+        self.python_decisions += 1
+        decision = self._strategy_decision(hbt, market, pricing)
+        signal = Signal(decision.action)
+        self._record_market_row(hbt, self._coordinated_step, market, pricing, signal)
+        event = CoordinatedEvent(
+            int(hbt.current_timestamp),
+            signal,
+            bool(decision.should_execute),
+            str(decision.reason),
+        )
+        self._coordinated_pending = (event, market, pricing, decision)
+        return event
+
+    def resolve_coordinated_event_session(self, blocked_reason: str | None = None) -> bool:
+        """Resolve the pending event and return whether an entry filled."""
+        pending = getattr(self, "_coordinated_pending", None)
+        if pending is None:
+            raise RuntimeError("no pending coordinated event")
+        event, market, pricing, decision = pending
+        self._coordinated_pending = None
+        if market is None or event.signal == Signal.HOLD:
+            return False
+        if not decision.should_execute:
+            self._append_skip_row(
+                self._coordinated_hbt,
+                self._coordinated_step,
+                event.signal,
+                market,
+                pricing,
+                decision.reason,
+            )
+            return False
+        if blocked_reason is not None:
+            self._append_skip_row(
+                self._coordinated_hbt,
+                self._coordinated_step,
+                event.signal,
+                market,
+                pricing,
+                blocked_reason,
+            )
+            return False
+
+        previous_rows = len(self.rows)
+        self._execute_signal(
+            self._coordinated_hbt,
+            self._coordinated_step,
+            event.signal,
+            market,
+            pricing,
+        )
+        return (
+            event.signal in (Signal.ENTER_LONG_SPOT_SHORT_FUTURE, Signal.ENTER_SHORT_SPOT_LONG_FUTURE)
+            and len(self.rows) > previous_rows
+            and self.rows[-1].get("status") == "FILLED"
+        )
+
+    def close_coordinated_event_session(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Finalize and close a coordinated event replay."""
+        hbt = self._coordinated_hbt
+        try:
+            self._record_final_market(
+                hbt,
+                self._coordinated_step,
+                self._coordinated_last_market,
+                self._coordinated_last_pricing,
+            )
+            trades = execution_rows_frame(self.rows)
+            return trades, pd.DataFrame([self._summary_row(trades)])
+        finally:
+            hbt.close()
+
+    def abort_coordinated_event_session(self) -> None:
+        """Close an opened coordinated replay without producing result frames."""
+        hbt = getattr(self, "_coordinated_hbt", None)
+        if hbt is not None:
+            hbt.close()
 
     def run(self) -> tuple[pd.DataFrame, pd.DataFrame]:
         strategy_clock = self.config.strategy_clock.strip().lower()
@@ -775,7 +901,9 @@ class HbtPairBacktester:
             self.position.future_units -= 1
         self.position.entry_spot_price = weighted_average(self.position.entry_spot_price, old_quantity, spot_price, 1)
         self.position.entry_future_price = weighted_average(self.position.entry_future_price, old_quantity, future_price, 1)
-        self.position.last_entry_time = first.local_timestamp
+        self.position.last_entry_time = (
+            None if first.local_timestamp is None else first.local_timestamp / 1_000_000_000
+        )
         self.position.quantity = new_quantity
 
     def _reduce_position_after_exit(self) -> None:
@@ -1006,6 +1134,7 @@ class HbtPairBacktester:
                 else None
             ),
             "second_leg_delay_ns": self.config.second_leg_delay_ns,
+            "min_entry_interval_sec": self.config.pair.min_entry_interval_sec,
             "post_first_feed_wait": self.config.post_first_feed_wait,
             "post_first_feed_timeout_ns": self.config.post_first_feed_timeout_ns,
             "post_first_feed_poll_ns": self.config.post_first_feed_poll_ns,

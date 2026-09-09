@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 from datetime import date
 from pathlib import Path
@@ -32,37 +33,48 @@ def test_choose_trade_date_uses_latest_eligible_calendar_date(tmp_path: Path) ->
     ) == "2026-09-07"
     assert daily_lark.choose_trade_date(
         calendar,
+        None,
+        today=date(2026, 9, 8),
+        excluded_dates=(),
+    ) == "2026-09-07"
+    assert daily_lark.choose_trade_date(
+        calendar,
         "2026-09-04",
         excluded_dates=(),
     ) == "2026-09-04"
 
 
-def test_build_backtest_command_enforces_daily_date_and_output(tmp_path: Path) -> None:
+def test_build_backtest_command_enforces_notebook_profile_date_and_output(tmp_path: Path) -> None:
     output = tmp_path / "result"
     command = daily_lark.build_backtest_command(
         python="python-test",
         trade_date="2026-09-08",
         output_dir=output,
-        extra_args=("--report-mode", "full", "--workers", "1"),
     )
 
-    assert command[-8:] == [
+    assert command[-6:] == [
         "--start-date",
         "2026-09-08",
         "--end-date",
         "2026-09-08",
-        "--report-mode",
-        "daily",
         "--output-dir",
         str(output),
     ]
     assert command[0] == "python-test"
-    assert "--workers" in command
+    assert command[command.index("--engine") + 1] == "slim"
+    assert command[command.index("--market-data-cache") + 1] == "compact"
+    assert command[command.index("--report-mode") + 1] == "daily"
+    assert command[command.index("--strategy-clock") + 1] == "event"
+    assert command[command.index("--post-first-feed-wait") + 1] == "none"
+    assert command[command.index("--min-entry-interval-sec") + 1] == "0.001"
+    assert "--post-first-feed-poll-ms" not in command
+    assert "--no-leverage" in command
 
 
-def test_success_message_keeps_full_raw_ticks() -> None:
+def test_success_message_keeps_run_key_and_readable_time_without_raw_ticks() -> None:
     rows = [
         {
+            "run_key": "2026-09-08::2492_HBFJ6",
             "timestamp_tw": "2026-09-08 09:00:02.265303+08:00",
             "signal": "ENTER_LONG_SPOT_SHORT_FUTURE",
             "spot_bid": "312.0",
@@ -81,8 +93,10 @@ def test_success_message_keeps_full_raw_ticks() -> None:
         max_rows=10,
     )
 
-    assert "1788829202263735000" in message
-    assert "1788829202263000000" in message
+    assert "2026-09-08::2492_HBFJ6" in message
+    assert "2026-09-08 09:00:02.265303+08:00" in message
+    assert "1788829202263735000" not in message
+    assert "1788829202263000000" not in message
     assert "Z:\\hftbacktest_daily_reports\\20260908\\daily_backtest_summary.csv" in message
 
 
@@ -92,6 +106,53 @@ def test_read_daily_summary_rejects_an_old_schema(tmp_path: Path) -> None:
 
     with pytest.raises(daily_lark.DailyLarkError, match="missing required columns"):
         daily_lark.read_daily_summary(csv_path)
+
+
+def test_read_daily_summary_trims_padded_csv_columns_and_values(tmp_path: Path) -> None:
+    csv_path = tmp_path / "daily_backtest_summary.csv"
+    csv_path.write_text(
+        "run_key   , timestamp_tw , signal , spot_ask, spot_bid, future_ask, future_bid,"
+        " spot_tick_exch_timestamp, future_tick_exch_timestamp\n"
+        "pair-1, 2026-09-08 09:00:00+08:00, FILLED_SIGNAL , 10, 9, 11, 10, 123, 456\n",
+        encoding="utf-8",
+    )
+
+    rows = daily_lark.read_daily_summary(csv_path)
+
+    assert rows[0]["run_key"] == "pair-1"
+    assert rows[0]["signal"] == "FILLED_SIGNAL"
+
+
+def test_write_daily_summary_from_summary_mode_trades(tmp_path: Path) -> None:
+    trades_path = tmp_path / "trades_all_daily_pairs.csv"
+    csv_path = tmp_path / "daily_backtest_summary.csv"
+    header = [*daily_lark.DAILY_BACKTEST_SUMMARY_COLUMNS, "status"]
+    rows = [
+        {
+            **{
+                name: f"filled-{name}"
+                for name in daily_lark.DAILY_BACKTEST_SUMMARY_COLUMNS
+            },
+            "status": "FILLED",
+        },
+        {
+            **{
+                name: f"expired-{name}"
+                for name in daily_lark.DAILY_BACKTEST_SUMMARY_COLUMNS
+            },
+            "status": "EXPIRED",
+        },
+    ]
+    with trades_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=header)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    daily_lark.write_daily_summary_from_trades(trades_path, csv_path)
+
+    result = daily_lark.read_daily_summary(csv_path)
+    assert len(result) == 1
+    assert result[0]["run_key"] == "filled-run_key"
 
 
 def test_send_lark_text_posts_signed_json(monkeypatch: pytest.MonkeyPatch) -> None:

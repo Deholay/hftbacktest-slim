@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 from concurrent.futures import ProcessPoolExecutor, as_completed
+import heapq
 import hashlib
 import json
 import logging
@@ -387,6 +388,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--entry-threshold-pct", type=float, default=None)
     parser.add_argument("--exit-threshold-pct", type=float, default=None)
     parser.add_argument("--min-effective-tick-multiple", type=float, default=None)
+    parser.add_argument("--min-entry-interval-sec", type=float, default=None)
     parser.add_argument("--min-second-leg-adjusted-basis-pct", type=float, default=None)
     parser.add_argument("--no-second-leg-profit-check", action="store_true")
     parser.add_argument("--no-flatten", action="store_true")
@@ -472,6 +474,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.market_data_cache = "compact"
     if args.strategy_clock == "event" and args.engine != "slim":
         parser.error("--strategy-clock event requires --engine slim")
+    if args.min_entry_interval_sec is not None and args.min_entry_interval_sec < 0:
+        parser.error("--min-entry-interval-sec must be non-negative")
     if args.report_mode == "full" and (
         args.full_report_max_rows is None or args.full_report_max_rows <= 0
     ):
@@ -2111,15 +2115,14 @@ def run_backtests(
     workers = max(1, min(int(getattr(args, "workers", 1)), len(runnable) or 1))
     logging.info("running %s pair backtests with workers=%s", len(runnable), workers)
     if workers == 1:
-        for index, (record, paths) in enumerate(runnable, start=1):
-            try:
-                completed[record.run_key] = _run_single_pair_backtest(args, record, paths)
-                if index == len(runnable) or index % 10 == 0:
-                    logging.info("pair backtest progress=%s/%s", index, len(runnable))
-            except Exception as exc:
-                failures[record.run_key] = repr(exc)
-                if not args.continue_on_error:
-                    raise
+        _, shard_results = _run_backtest_shard(args, runnable)
+        for index, (run_key, result, error) in enumerate(shard_results, start=1):
+            if error is None and result is not None:
+                completed[run_key] = result
+            elif error is not None:
+                failures[run_key] = error
+            if index == len(runnable) or index % 10 == 0:
+                logging.info("pair backtest progress=%s/%s", index, len(runnable))
     elif executor is None:
         with ProcessPoolExecutor(max_workers=workers) as date_executor:
             _collect_parallel_backtests(
@@ -2217,7 +2220,9 @@ def balanced_backtest_shards(
     ]
     totals = [0] * shard_count
     row_counts = event_rows or {}
-    weighted: list[tuple[DailyPairRecord, dict[str, Path], int]] = []
+    weighted_groups: dict[
+        tuple[str, str], list[tuple[DailyPairRecord, dict[str, Path], int]]
+    ] = {}
     for record, paths in runnable:
         weight = sum(max(0, int(row_counts.get(str(path), 0))) for path in paths.values())
         if weight <= 0:
@@ -2225,11 +2230,18 @@ def balanced_backtest_shards(
                 max(1, int(path.stat().st_size)) if path.exists() else 1
                 for path in paths.values()
             )
-        weighted.append((record, paths, weight))
-    for item in sorted(weighted, key=lambda value: (-value[2], value[0].run_key)):
+        weighted_groups.setdefault(
+            (record.trade_date, str(record.pair.spot_symbol)), []
+        ).append((record, paths, weight))
+    groups = sorted(
+        weighted_groups.values(),
+        key=lambda group: (-sum(item[2] for item in group), min(item[0].run_key for item in group)),
+    )
+    for group in groups:
+        group_weight = sum(item[2] for item in group)
         index = min(range(shard_count), key=lambda shard_index: (totals[shard_index], shard_index))
-        shards[index].append(item)
-        totals[index] += item[2]
+        shards[index].extend(sorted(group, key=lambda item: item[0].run_key))
+        totals[index] += group_weight
     return [shard for shard in shards if shard]
 
 
@@ -2238,15 +2250,112 @@ def _run_backtest_shard(
     shard: list[tuple[DailyPairRecord, dict[str, Path]]],
 ) -> tuple[int, list[tuple[str, dict[str, pd.DataFrame] | None, str | None]]]:
     results: list[tuple[str, dict[str, pd.DataFrame] | None, str | None]] = []
+    spot_groups: dict[tuple[str, str], list[tuple[DailyPairRecord, dict[str, Path]]]] = {}
     for record, paths in shard:
+        spot_groups.setdefault((record.trade_date, str(record.pair.spot_symbol)), []).append(
+            (record, paths)
+        )
+    for group in spot_groups.values():
         try:
-            result = _run_single_pair_backtest(args, record, paths)
-            results.append((record.run_key, result, None))
+            if _uses_shared_spot_cooldown(args, group):
+                for run_key, result in _run_shared_spot_cooldown_group(args, group).items():
+                    results.append((run_key, result, None))
+            else:
+                for record, paths in group:
+                    result = _run_single_pair_backtest(args, record, paths)
+                    results.append((record.run_key, result, None))
         except Exception as exc:
             if not args.continue_on_error:
-                raise RuntimeError(f"pair backtest failed run_key={record.run_key}: {exc!r}") from exc
-            results.append((record.run_key, None, repr(exc)))
+                run_keys = ",".join(record.run_key for record, _ in group)
+                raise RuntimeError(f"pair backtest failed run_keys={run_keys}: {exc!r}") from exc
+            results.extend((record.run_key, None, repr(exc)) for record, _ in group)
     return os.getpid(), results
+
+
+def _uses_shared_spot_cooldown(
+    args: argparse.Namespace,
+    group: list[tuple[DailyPairRecord, dict[str, Path]]],
+) -> bool:
+    if len(group) < 2:
+        return False
+    intervals = {
+        float(pair_with_overrides(args, record.pair).min_entry_interval_sec)
+        for record, _ in group
+    }
+    if max(intervals, default=0.0) <= 0:
+        return False
+    if len(intervals) != 1:
+        raise ValueError("pairs sharing one spot symbol must use the same min_entry_interval_sec")
+    if getattr(args, "engine", "reference") != "slim" or getattr(args, "strategy_clock", "step") != "event":
+        raise ValueError("cross-month shared spot cooldown requires slim engine with event strategy clock")
+    return True
+
+
+def _run_shared_spot_cooldown_group(
+    args: argparse.Namespace,
+    group: list[tuple[DailyPairRecord, dict[str, Path]]],
+) -> dict[str, dict[str, pd.DataFrame]]:
+    """Interleave monthly pair engines and authorize entries on one spot clock."""
+    sessions: dict[str, tuple[DailyPairRecord, HbtPairBacktestConfig, HbtPairBacktester]] = {}
+    pending: list[tuple[int, str, Any]] = []
+    opened: list[HbtPairBacktester] = []
+    try:
+        for record, paths in sorted(group, key=lambda item: item[0].run_key):
+            config = build_pair_hbt_config(args, record.pair, paths, trade_date=record.trade_date)
+            backtester = HbtPairBacktester(config)
+            event = backtester.open_coordinated_event_session()
+            opened.append(backtester)
+            sessions[record.run_key] = (record, config, backtester)
+            if event is not None:
+                heapq.heappush(pending, (event.timestamp_ns, record.run_key, event))
+
+        last_entry_ns: int | None = None
+        while pending:
+            _, run_key, event = heapq.heappop(pending)
+            record, config, backtester = sessions[run_key]
+            blocked_reason = None
+            is_entry = event.signal in (
+                Signal.ENTER_LONG_SPOT_SHORT_FUTURE,
+                Signal.ENTER_SHORT_SPOT_LONG_FUTURE,
+            )
+            cooldown_ns = int(round(config.pair.min_entry_interval_sec * 1_000_000_000))
+            if (
+                is_entry
+                and event.should_execute
+                and last_entry_ns is not None
+                and 0 <= event.timestamp_ns - last_entry_ns < cooldown_ns
+            ):
+                elapsed_ns = event.timestamp_ns - last_entry_ns
+                blocked_reason = (
+                    "shared spot entry interval not elapsed "
+                    f"({elapsed_ns / 1_000_000:.6f}/{cooldown_ns / 1_000_000:.6f}ms)"
+                )
+            if backtester.resolve_coordinated_event_session(blocked_reason):
+                filled_row = backtester.rows[-1]
+                fill_timestamp = filled_row.get("first_local_timestamp")
+                if fill_timestamp is None:
+                    fill_timestamp = filled_row.get("completion_timestamp", event.timestamp_ns)
+                fill_timestamp = int(fill_timestamp)
+                last_entry_ns = (
+                    fill_timestamp
+                    if last_entry_ns is None
+                    else max(last_entry_ns, fill_timestamp)
+                )
+            next_event = backtester.advance_coordinated_event_session()
+            if next_event is not None:
+                heapq.heappush(pending, (next_event.timestamp_ns, run_key, next_event))
+
+        results: dict[str, dict[str, pd.DataFrame]] = {}
+        for run_key, (record, config, backtester) in sessions.items():
+            trades, summary = backtester.close_coordinated_event_session()
+            opened.remove(backtester)
+            results[run_key] = _format_pair_backtest_result(
+                record, config, backtester, trades, summary
+            )
+        return results
+    finally:
+        for backtester in opened:
+            backtester.abort_coordinated_event_session()
 
 
 def _run_single_pair_backtest(
@@ -2258,6 +2367,16 @@ def _run_single_pair_backtest(
     config = build_pair_hbt_config(args, record.pair, paths, trade_date=record.trade_date)
     backtester = HbtPairBacktester(config)
     trades, summary = backtester.run()
+    return _format_pair_backtest_result(record, config, backtester, trades, summary)
+
+
+def _format_pair_backtest_result(
+    record: DailyPairRecord,
+    config: HbtPairBacktestConfig,
+    backtester: HbtPairBacktester,
+    trades: pd.DataFrame,
+    summary: pd.DataFrame,
+) -> dict[str, pd.DataFrame]:
     market = backtester.market_frame()
     latency = backtester.latency_frame()
     trades = add_run_columns(add_execution_latency_columns(with_time_columns(trades)), record)
@@ -2354,6 +2473,7 @@ HBT_RESULT_ARG_NAMES = (
     "entry_threshold_pct",
     "exit_threshold_pct",
     "min_effective_tick_multiple",
+    "min_entry_interval_sec",
     "min_second_leg_adjusted_basis_pct",
     "no_second_leg_profit_check",
     "no_flatten",
@@ -2719,6 +2839,7 @@ def pair_with_overrides(args: argparse.Namespace, pair: PairConfig) -> PairConfi
         ("entry_threshold_pct", "entry_threshold_pct"),
         ("exit_threshold_pct", "exit_threshold_pct"),
         ("min_effective_tick_multiple", "min_effective_tick_multiple"),
+        ("min_entry_interval_sec", "min_entry_interval_sec"),
         ("min_second_leg_adjusted_basis_pct", "min_second_leg_adjusted_basis_pct"),
     ):
         value = getattr(args, arg_name)
