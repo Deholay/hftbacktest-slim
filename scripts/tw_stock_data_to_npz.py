@@ -36,6 +36,7 @@ import importlib
 import math
 import sys
 import time
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -50,6 +51,7 @@ from hftbacktest_slim import (  # noqa: E402
     aggregate_depth_side,
     normalized_bbo_from_depth_columns,
 )
+from scripts.tw_market_status import is_twse_trial_status, twse_trial_status_mask
 
 
 DEPTH_EVENT = 1
@@ -106,7 +108,40 @@ DEFAULT_DAILY_PARQUET_DIRS = {
 }
 
 PRICE_ONLY_DEPTH_SOURCE_KINDS = {"odd_lot", "etf"}
+TWSE_STATUS_SOURCE_KINDS = {"stock", "odd_lot", "etf"}
+EVENT_CONVERTER_VERSION = 2
 DEFAULT_DATA_PLATFORM_BASE = "/mnt/z/數據平台"
+
+
+def event_data_semantics_issue(path: Path, source_kind: str = "stock") -> str | None:
+    """Return why an existing event archive cannot enforce current TWSE halt semantics."""
+
+    source_kind = normalize_source_kind(source_kind)
+    if source_kind not in TWSE_STATUS_SOURCE_KINDS:
+        return None
+    path = Path(path)
+    if not path.is_file():
+        return f"missing event archive: {path}"
+    try:
+        with np.load(path, allow_pickle=False) as archive:
+            version = (
+                int(np.asarray(archive["converter_version"]).reshape(-1)[0])
+                if "converter_version" in archive.files
+                else 0
+            )
+            disabled = (
+                int(np.asarray(archive["twse_trial_trading_disabled"]).reshape(-1)[0])
+                if "twse_trial_trading_disabled" in archive.files
+                else 0
+            )
+    except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile) as exc:
+        return f"cannot validate event archive metadata: {exc!r}"
+    if version < EVENT_CONVERTER_VERSION or disabled != 1:
+        return (
+            "event archive predates TWSE trial-match trading protection "
+            f"(converter_version={version}, disabled={disabled})"
+        )
+    return None
 
 
 def default_data_api_module_dir(root: Path) -> Path:
@@ -761,6 +796,7 @@ class ConversionStats:
     skipped_symbol_rows: int = 0
     skipped_status_rows: int = 0
     skipped_time_rows: int = 0
+    non_tradable_rows: int = 0
     raw_events: int = 0
     output_events: int = 0
     depth_events: int = 0
@@ -1107,6 +1143,7 @@ def _fill_events_from_columns(
     bid_quantities: np.ndarray,
     ask_prices: np.ndarray,
     ask_quantities: np.ndarray,
+    tradable: np.ndarray,
     volume_scale: float,
     price_only_depth_qty: float,
     use_price_only_depth_qty: bool,
@@ -1135,6 +1172,58 @@ def _fill_events_from_columns(
     work_quantities = np.empty(levels, dtype=np.float64)
 
     for row in range(len(exch_ts)):
+        if not tradable[row]:
+            marker = ask_prices[row, 0]
+            if not (np.isfinite(marker) and marker > 0.0):
+                marker = bid_prices[row, 0]
+            if not (np.isfinite(marker) and marker > 0.0):
+                marker = last_price[row]
+            if not (np.isfinite(marker) and marker > 0.0):
+                marker = previous_ask
+            if not (np.isfinite(marker) and marker > 0.0):
+                marker = previous_bid
+            if emit_depth and np.isfinite(marker) and marker > 0.0:
+                out_rn = _write_event(
+                    out,
+                    out_rn,
+                    DEPTH_CLEAR_EVENT | BUY_EVENT,
+                    exch_ts[row],
+                    local_ts[row],
+                    marker,
+                    0.0,
+                )
+                out_rn = _write_event(
+                    out,
+                    out_rn,
+                    DEPTH_SNAPSHOT_EVENT | BUY_EVENT,
+                    exch_ts[row],
+                    local_ts[row],
+                    marker,
+                    1.0,
+                )
+                out_rn = _write_event(
+                    out,
+                    out_rn,
+                    DEPTH_CLEAR_EVENT | SELL_EVENT,
+                    exch_ts[row],
+                    local_ts[row],
+                    marker,
+                    0.0,
+                )
+                out_rn = _write_event(
+                    out,
+                    out_rn,
+                    DEPTH_SNAPSHOT_EVENT | SELL_EVENT,
+                    exch_ts[row],
+                    local_ts[row],
+                    marker,
+                    1.0,
+                )
+                depth_events += 4
+            previous_total_volume = total_volume[row]
+            has_previous_volume = True
+            continue
+
         if emit_trades and has_previous_volume:
             delta_volume = total_volume[row] - previous_total_volume
             px = last_price[row]
@@ -1284,8 +1373,28 @@ def build_events_from_parquet_frame(
     ask_prices = _float_matrix(df, [f"ask_price{level}" for level in range(1, args.levels + 1)])
     bid_quantities = _float_matrix(df, [f"bid_volume{level}" for level in range(1, args.levels + 1)])
     ask_quantities = _float_matrix(df, [f"ask_volume{level}" for level in range(1, args.levels + 1)])
+    tradable = np.ones(df.height, dtype=np.bool_)
+    if "tradable" in df.columns:
+        tradable = _float_column(df, "tradable", default=1.0) != 0.0
+    elif getattr(args, "source_kind", "stock") in TWSE_STATUS_SOURCE_KINDS:
+        if "status" not in df.columns:
+            raise ValueError("TWSE conversion requires status or explicit tradable column")
+        status = _float_column(df, "status", default=0.0)
+        raw_present = df.get_column("status").is_not_null().to_numpy()
+        invalid = raw_present & (
+            ~np.isfinite(status)
+            | (status < 0)
+            | (status > np.iinfo(np.uint32).max)
+            | (status != np.floor(status))
+        )
+        if np.any(invalid):
+            raise ValueError("TWSE status must contain packed uint32 values")
+        tradable = ~twse_trial_status_mask(status.astype(np.uint32))
+    stats.non_tradable_rows = int(np.count_nonzero(~tradable))
+    if args.no_depth and stats.non_tradable_rows:
+        raise ValueError("TWSE trial-match blocking requires depth events")
 
-    max_events_per_row = 2 * args.levels + 3
+    max_events_per_row = max(4, 2 * args.levels + 3)
     raw = np.empty(df.height * max_events_per_row, dtype=EVENT_DTYPE)
     trade_side_code = {"buy": 1, "sell": -1, "infer": 0, "none": 0}[args.trade_side]
     price_only_depth_qty = 0.0 if args.price_only_depth_qty is None else args.price_only_depth_qty
@@ -1307,6 +1416,7 @@ def build_events_from_parquet_frame(
         bid_quantities,
         ask_prices,
         ask_quantities,
+        tradable,
         args.volume_scale,
         price_only_depth_qty,
         args.price_only_depth_qty is not None,
@@ -1367,6 +1477,79 @@ def build_events_from_rows(
 
         total_volume = to_int(row.get("total_volume"))
         last_price = to_float(row.get("last_price"))
+        source_kind = getattr(args, "source_kind", "stock")
+        explicit_tradable = row.get("tradable")
+        non_tradable = explicit_tradable is not None and not bool(to_int(explicit_tradable))
+        if explicit_tradable is None and source_kind in TWSE_STATUS_SOURCE_KINDS:
+            if "status" not in row:
+                raise ValueError("TWSE conversion requires status or explicit tradable field")
+            packed_status = to_float(row.get("status"))
+            if (
+                not math.isfinite(packed_status)
+                or packed_status < 0
+                or packed_status > np.iinfo(np.uint32).max
+                or packed_status != math.floor(packed_status)
+            ):
+                raise ValueError("TWSE status must contain a packed uint32 value")
+            non_tradable = is_twse_trial_status(int(packed_status))
+
+        if non_tradable:
+            stats.non_tradable_rows += 1
+            if args.no_depth:
+                raise ValueError("TWSE trial-match blocking requires depth events")
+            marker = next(
+                (
+                    value
+                    for value in (
+                        to_float(row.get("ask_price1")),
+                        to_float(row.get("bid_price1")),
+                        last_price,
+                        previous_ask,
+                        previous_bid,
+                    )
+                    if math.isfinite(value) and value > 0
+                ),
+                math.nan,
+            )
+            if math.isfinite(marker):
+                row_events = [
+                    make_event(
+                        DEPTH_CLEAR_EVENT | BUY_EVENT,
+                        exch_ts,
+                        local_ts,
+                        marker,
+                        0.0,
+                    ),
+                    make_event(
+                        DEPTH_SNAPSHOT_EVENT | BUY_EVENT,
+                        exch_ts,
+                        local_ts,
+                        marker,
+                        1.0,
+                    ),
+                    make_event(
+                        DEPTH_CLEAR_EVENT | SELL_EVENT,
+                        exch_ts,
+                        local_ts,
+                        marker,
+                        0.0,
+                    ),
+                    make_event(
+                        DEPTH_SNAPSHOT_EVENT | SELL_EVENT,
+                        exch_ts,
+                        local_ts,
+                        marker,
+                        1.0,
+                    ),
+                ]
+            else:
+                row_events = []
+            for event in row_events:
+                stats.depth_events += 1
+            events.extend(row_events)
+            previous_total_volume = total_volume
+            stats.converted_rows += 1
+            continue
 
         row_events: list[tuple] = []
         expected_trade_qty = 0.0
@@ -1456,6 +1639,7 @@ def print_summary(stats: ConversionStats, output: Path) -> None:
     print(f"skipped_symbol_rows={stats.skipped_symbol_rows}")
     print(f"skipped_status_rows={stats.skipped_status_rows}")
     print(f"skipped_time_rows={stats.skipped_time_rows}")
+    print(f"non_tradable_rows={stats.non_tradable_rows}")
     print(f"raw_events={stats.raw_events}")
     print(f"output_events={stats.output_events}")
     print(f"depth_events={stats.depth_events}")
@@ -1530,6 +1714,9 @@ def save_event_data(
             dtype=np.int64,
         ),
         trade_events=np.asarray([int(np.sum(kinds == TRADE_EVENT))], dtype=np.int64),
+        converter_version=np.asarray([EVENT_CONVERTER_VERSION], dtype=np.int64),
+        twse_trial_trading_disabled=np.asarray([1], dtype=np.uint8),
+        non_tradable_rows=np.asarray([stats.non_tradable_rows], dtype=np.int64),
     )
     stats.write_seconds = time.perf_counter() - write_started
 

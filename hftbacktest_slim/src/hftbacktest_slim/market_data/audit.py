@@ -37,6 +37,11 @@ def compact_partition_audit(
     prices = np.concatenate((bid, ask))
     prices = prices[np.isfinite(prices) & (prices > 0)]
     volume = table["total_volume"].to_numpy(zero_copy_only=False)
+    tradable = table["tradable"].to_numpy(zero_copy_only=False)
+    if np.any((tradable != 0) & (tradable != 1)):
+        raise CompactCacheError(
+            f"compact partition {path} has tradable values outside 0/1"
+        )
     raw_latency = local_raw - exchange
     corrected_latency = local - exchange
     return {
@@ -51,7 +56,12 @@ def compact_partition_audit(
         "min_price": float(prices.min()) if len(prices) else None,
         "max_price": float(prices.max()) if len(prices) else None,
         "depth_events": None,
-        "trade_events": int(np.sum(np.diff(volume) > 0)) if len(volume) > 1 else 0,
+        "trade_events": (
+            int(np.sum((np.diff(volume) > 0) & (tradable[1:] != 0)))
+            if len(volume) > 1
+            else 0
+        ),
+        "non_tradable_rows": int(np.count_nonzero(tradable == 0)),
         "metadata": metadata,
         "schema_valid": True,
     }

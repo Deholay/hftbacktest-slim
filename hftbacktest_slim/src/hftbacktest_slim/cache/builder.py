@@ -18,6 +18,7 @@ from ..errors import CompactCacheError
 from ..market_data.normalize import normalized_bbo_from_depth_columns
 from ..market_data.ordering import timestamp_ordering_facts, write_order_sidecar
 from ..market_data.schema import BBO_SCHEMA, COMPACT_SCHEMA_VERSION, PROJECTED_COLUMNS
+from ..market_data.status import twse_trial_status_mask
 from .config import CompactBuildConfig, CompactSource
 from .manifest import file_sha256
 from .publication import directory_bytes, runtime_budget_check, write_json
@@ -31,6 +32,7 @@ class _SymbolState:
     last_exch_ts: int | None = None
     min_price: float | None = None
     max_price: float | None = None
+    non_tradable_rows: int = 0
 
 
 def build_source(
@@ -89,6 +91,7 @@ def build_source(
                 trade_date=trade_date,
                 compression=config.compression,
                 base_latency_ns=config.base_latency_ns,
+                non_tradable_rows=state.non_tradable_rows,
             )
         else:
             symbol_manifest[symbol] = consolidate_symbol(
@@ -99,6 +102,7 @@ def build_source(
                 trade_date=trade_date,
                 compression=config.compression,
                 base_latency_ns=config.base_latency_ns,
+                non_tradable_rows=state.non_tradable_rows,
             )
         runtime_budget_check(Path(config.cache_root), temp, config)
     # The target is the specific build-owned parts directory; completed symbol
@@ -111,6 +115,9 @@ def build_source(
         "input_rows": input_rows,
         "input_bytes": sum(Path(path).stat().st_size for path in source.paths),
         "output_rows": sum(item.get("rows", 0) for item in symbol_manifest.values()),
+        "non_tradable_rows": sum(
+            item.get("non_tradable_rows", 0) for item in symbol_manifest.values()
+        ),
         "output_bytes": output_bytes,
         "elapsed_seconds": time.perf_counter() - started,
         "missing_symbols": sorted(
@@ -159,6 +166,8 @@ def _observe_symbol_state(state: _SymbolState, table: pa.Table) -> None:
             if state.max_price is None
             else max(state.max_price, float(prices.max()))
         )
+    tradable = table["tradable"].to_numpy(zero_copy_only=False)
+    state.non_tradable_rows += int(np.count_nonzero(tradable == 0))
 
 
 def compact_batch(
@@ -193,6 +202,16 @@ def compact_batch(
     ask_px, ask_qty = best_side(ask_prices, ask_quantities, False, source)
     last_px = numeric(batch, "last_price", indexes, np.float64, default=np.nan)
     total_volume = numeric(batch, "total_volume", indexes, np.int64, default=0)
+    tradable = np.ones(len(indexes), dtype=np.uint8)
+    if source.kind in {"stock", "etf", "odd_lot"}:
+        if "status" not in batch.schema.names or not pa.types.is_integer(
+            batch.schema.field("status").type
+        ):
+            raise CompactCacheError(
+                f"{source.kind} compact conversion requires packed integer status"
+            )
+        status = numeric(batch, "status", indexes, np.uint32, default=0)
+        tradable[twse_trial_status_mask(status)] = 0
     return pa.Table.from_arrays(
         [
             seq,
@@ -204,6 +223,7 @@ def compact_batch(
             ask_qty,
             last_px,
             total_volume,
+            tradable,
         ],
         schema=BBO_SCHEMA,
     )
@@ -318,6 +338,7 @@ def consolidate_symbol(
         "requires_dual_order": ordering["requires_dual_order"],
         "min_price": float(valid_prices.min()) if len(valid_prices) else None,
         "max_price": float(valid_prices.max()) if len(valid_prices) else None,
+        "non_tradable_rows": int(metadata["non_tradable_rows"]),
         "sidecars": sidecars,
         "status": "valid",
     }
@@ -349,6 +370,7 @@ def write_empty_symbol(output: Path, **metadata: Any) -> dict[str, Any]:
         "requires_dual_order": False,
         "min_price": None,
         "max_price": None,
+        "non_tradable_rows": 0,
         "sidecars": {},
         "empty": True,
         "status": "valid",

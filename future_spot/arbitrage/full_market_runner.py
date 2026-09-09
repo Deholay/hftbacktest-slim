@@ -41,6 +41,7 @@ from scripts.tw_stock_data_to_npz import (  # noqa: E402
     convert_tw_stock_future_to_npz,
     convert_tw_stock_to_npz,
     default_output_path,
+    event_data_semantics_issue,
     parse_timestamp,
 )
 from hftbacktest_slim import (  # noqa: E402
@@ -52,7 +53,10 @@ from hftbacktest_slim import (  # noqa: E402
     CompactSource,
 )
 from hftbacktest_slim.market_data import compact_partition_audit  # noqa: E402
-from scripts.compact_hbt_adapter import write_reference_npz_from_compact  # noqa: E402
+from scripts.compact_hbt_adapter import (  # noqa: E402
+    ADAPTER_VERSION as COMPACT_HBT_ADAPTER_VERSION,
+    write_reference_npz_from_compact,
+)
 from hftbacktest_slim import SLIM_ENGINE_VERSION  # noqa: E402
 from scripts.tw_stock_hftbacktest import BacktestConfig  # noqa: E402
 from scripts.io_utils import (  # noqa: E402
@@ -267,7 +271,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--compact-cache-root",
         type=Path,
-        default=WORKSPACE_ROOT / "data" / "tw_compact_v1",
+        default=WORKSPACE_ROOT / "data" / "tw_compact_v2",
     )
     parser.add_argument(
         "--stock-tick-parquet-template",
@@ -1573,7 +1577,12 @@ def build_compact_event_data(
                 if output.is_file() and adapter_manifest.is_file() and not args.rebuild_event_data:
                     try:
                         saved = json.loads(adapter_manifest.read_text(encoding="utf-8"))
-                        reusable = saved.get("compact_identity_sha256") == manifest["identity_sha256"]
+                        reusable = (
+                            saved.get("adapter_version") == COMPACT_HBT_ADAPTER_VERSION
+                            and saved.get("compact_schema_version") == COMPACT_SCHEMA_VERSION
+                            and saved.get("compact_identity_sha256")
+                            == manifest["identity_sha256"]
+                        )
                     except (OSError, json.JSONDecodeError):
                         reusable = False
                 if not reusable:
@@ -1628,10 +1637,18 @@ def expected_event_path(args: argparse.Namespace, symbol: str, source_kind: str,
 
 def ensure_spot_events(args: argparse.Namespace, symbol: str, trade_date: str) -> EventDataResult:
     output = expected_event_path(args, symbol, "stock", trade_date)
-    if output.exists() and not args.rebuild_event_data:
+    semantics_issue = (
+        event_data_semantics_issue(output, "stock") if output.exists() else None
+    )
+    if output.exists() and not args.rebuild_event_data and semantics_issue is None:
         return EventDataResult(output, "existing")
     if args.no_convert_missing_event_data and not args.rebuild_event_data:
-        return EventDataResult(None, "missing", f"missing spot npz: {output}")
+        error = (
+            f"incompatible spot npz: {output}: {semantics_issue}"
+            if semantics_issue
+            else f"missing spot npz: {output}"
+        )
+        return EventDataResult(None, "missing", error)
     try:
         input_csv = spot_input_csv_path(args, trade_date)
         split_input_csv = getattr(args, "spot_input_csv_by_symbol", {}).get((trade_date, symbol))
@@ -1665,7 +1682,13 @@ def prepare_spot_input_csvs(args: argparse.Namespace, records: list[DailyPairRec
         record
         for record in records
         if args.rebuild_event_data
-        or not expected_event_path(args, record.pair.spot_symbol, "stock", record.trade_date).exists()
+        or event_data_semantics_issue(
+            expected_event_path(
+                args, record.pair.spot_symbol, "stock", record.trade_date
+            ),
+            "stock",
+        )
+        is not None
     ]
     if not records:
         logging.info("all spot event NPZ files exist; skip daily CSV splitting")
@@ -1966,6 +1989,7 @@ def summarize_asset(args: argparse.Namespace, record: DailyPairRecord, leg: str,
         "max_feed_latency_ns": summary["max_latency_ns"],
         "depth_events": summary["depth_events"],
         "trade_events": summary["trade_events"],
+        "non_tradable_rows": summary.get("non_tradable_rows", 0),
         "engine": getattr(args, "engine", "reference"),
         "compact_schema_version": COMPACT_SCHEMA_VERSION
         if getattr(args, "market_data_cache", "event_npz") == "compact"
@@ -2001,6 +2025,7 @@ def compact_asset_audit(
             "max_latency_ns",
             "depth_events",
             "trade_events",
+            "non_tradable_rows",
         )
     }
 
@@ -2229,7 +2254,7 @@ def hbt_result_csvs_exist(output_dir: Path) -> bool:
     return all(paths[name].exists() for name in required)
 
 
-HBT_CACHE_SCHEMA_VERSION = 9
+HBT_CACHE_SCHEMA_VERSION = 10
 HBT_MANIFEST_NAME = "backtest_manifest.json"
 REFERENCE_ENGINE_VERSION = "reference-v1"
 HBT_RESULT_ARG_NAMES = (
@@ -2314,6 +2339,10 @@ def _hbt_implementation_paths(
         *(slim_python_root / "cache").rglob("*.py"),
         *(slim_python_root / "market_data").rglob("*.py"),
     ]
+    reference_converter_sources = [
+        slim_python_root / "market_data" / "normalize.py",
+        slim_python_root / "market_data" / "status.py",
+    ]
     slim_python_sources = [
         slim_python_root / "__init__.py",
         slim_python_root / "api.py",
@@ -2322,6 +2351,8 @@ def _hbt_implementation_paths(
         slim_python_sources.extend(slim_runtime_sources)
     if engine == "slim" or market_data_cache == "compact":
         slim_python_sources.extend(compact_sources)
+    if engine == "reference" and market_data_cache == "event_npz":
+        slim_python_sources.extend(reference_converter_sources)
     slim_python_sources = sorted(set(slim_python_sources), key=lambda path: path.as_posix())
     native_root = WORKSPACE_ROOT / "hftbacktest_slim" / "native"
     native_sources = sorted(
@@ -2350,6 +2381,8 @@ def _hbt_implementation_paths(
             ROOT_SCRIPT_ROOT / "hbt_types.py",
             ROOT_SCRIPT_ROOT / "io_utils.py",
             ROOT_SCRIPT_ROOT / "strategy_api.py",
+            ROOT_SCRIPT_ROOT / "tw_market_status.py",
+            ROOT_SCRIPT_ROOT / "tw_stock_data_to_npz.py",
             *(
                 [ROOT_SCRIPT_ROOT / "compact_hbt_adapter.py"]
                 if engine == "reference" and market_data_cache == "compact"
@@ -2408,6 +2441,12 @@ def hbt_manifest_payload(args: argparse.Namespace, records: list[DailyPairRecord
         "compact_builder_version": (
             COMPACT_BUILDER_VERSION
             if getattr(args, "market_data_cache", "event_npz") == "compact"
+            else None
+        ),
+        "compact_reference_adapter_version": (
+            COMPACT_HBT_ADAPTER_VERSION
+            if getattr(args, "engine", "reference") == "reference"
+            and getattr(args, "market_data_cache", "event_npz") == "compact"
             else None
         ),
         "daily_result_schema_version": DAILY_RESULT_SCHEMA_VERSION,

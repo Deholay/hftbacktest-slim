@@ -21,7 +21,7 @@ from scripts.tw_stock_data_to_npz import (
 )
 
 
-ADAPTER_VERSION = 1
+ADAPTER_VERSION = 2
 
 
 def compact_to_reference_events(
@@ -56,6 +56,7 @@ def compact_to_reference_events(
                 "bid_volume1": table["bid_qty"],
                 "ask_price1": table["ask_px"],
                 "ask_volume1": table["ask_qty"],
+                "tradable": table["tradable"],
             }
         )
     )
@@ -71,6 +72,7 @@ def compact_to_reference_events(
         no_trades=no_trades,
         no_depth=False,
         qa_sample_rows=1000,
+        source_kind="stock" if "tradable" in table.column_names else "stock_future",
     )
     return build_events_from_parquet_frame(frame, args)
 

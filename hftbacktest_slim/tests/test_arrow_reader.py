@@ -20,15 +20,17 @@ EXPECTED_NAMES = (
     "ask_qty",
     "last_px",
     "total_volume",
+    "tradable",
 )
 
 
 def test_native_dtype_has_exact_names_offsets_and_item_size() -> None:
     assert SLIM_ROW_DTYPE.names == EXPECTED_NAMES
-    assert SLIM_ROW_DTYPE.itemsize == 72
-    assert [SLIM_ROW_DTYPE.fields[name][1] for name in EXPECTED_NAMES] == list(
-        range(0, 72, 8)
-    )
+    assert SLIM_ROW_DTYPE.itemsize == 80
+    assert [SLIM_ROW_DTYPE.fields[name][1] for name in EXPECTED_NAMES] == [
+        *range(0, 72, 8),
+        72,
+    ]
     assert SLIM_ROW_DTYPE.isalignedstruct
 
 
@@ -53,6 +55,18 @@ def test_reader_preserves_metadata_values_order_and_decimal_prices(
     assert loaded.rows["local_ts_raw"].tolist() == [81, 80]
     np.testing.assert_array_equal(loaded.rows["bid_px"], [77.90, 78.00])
     np.testing.assert_array_equal(loaded.rows["ask_px"], [77.95, 78.05])
+
+
+def test_reader_rejects_tradable_values_outside_boolean_domain(
+    tmp_path: Path, write_partition
+) -> None:
+    path = write_partition(
+        tmp_path / "invalid-tradable.arrow",
+        [(0, 100, 100, 99.0, 101.0, 1.0, 1.0, 100.0, 1, 2)],
+    )
+
+    with pytest.raises(ArrowDataError, match="tradable values outside 0/1"):
+        read_rows(path)
 
 
 def test_reader_accepts_empty_partition_and_legacy_zero_adjustment_default(
@@ -87,6 +101,7 @@ def test_reader_rejects_incompatible_physical_type(tmp_path: Path, write_partiti
         ("ask_qty", pa.float64()),
         ("last_px", pa.float64()),
         ("total_volume", pa.int64()),
+        ("tradable", pa.uint8()),
     ]
     path = write_partition(tmp_path / "wrong.arrow", [], schema=pa.schema(fields))
     with pytest.raises(ArrowDataError, match="source_seq.*incompatible type"):
@@ -94,8 +109,8 @@ def test_reader_rejects_incompatible_physical_type(tmp_path: Path, write_partiti
 
 
 def test_reader_rejects_incompatible_declared_schema(tmp_path: Path, write_partition) -> None:
-    path = write_partition(tmp_path / "future.arrow", [], schema_version="bbo_v2")
-    with pytest.raises(ArrowDataError, match="bbo_v2"):
+    path = write_partition(tmp_path / "future.arrow", [], schema_version="bbo_v3")
+    with pytest.raises(ArrowDataError, match="bbo_v3"):
         read_rows(path)
 
 
@@ -127,4 +142,5 @@ def PHYSICAL_EXTRA_BASE() -> list[tuple[str, pa.DataType]]:
         ("ask_qty", pa.float64()),
         ("last_px", pa.float64()),
         ("total_volume", pa.int64()),
+        ("tradable", pa.uint8()),
     ]

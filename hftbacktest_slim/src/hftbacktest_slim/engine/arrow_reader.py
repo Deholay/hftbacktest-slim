@@ -1,4 +1,4 @@
-"""Read package-owned compact ``bbo_v1`` partitions for native ABI version 2."""
+"""Read package-owned compact ``bbo_v2`` partitions for native ABI version 3."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ def read_rows(path: str | PathLike[str] | Path) -> LoadedRows:
     """Load one valid (including empty) compact Arrow file into ABI row order.
 
     Missing ``local_timestamp_adjustment_ns`` metadata retains the legacy
-    compatible default of zero. A present schema version must be ``bbo_v1``.
+    compatible default of zero. A present schema version must be ``bbo_v2``.
     """
 
     resolved = Path(path)
@@ -73,6 +73,10 @@ def read_rows(path: str | PathLike[str] | Path) -> LoadedRows:
             raise ArrowDataError(
                 f"failed to copy compact Arrow field {name!r} from {resolved}: {exc}"
             ) from exc
+    if np.any((rows["tradable"] != 0) & (rows["tradable"] != 1)):
+        raise ArrowDataError(
+            f"compact Arrow partition {resolved} has tradable values outside 0/1"
+        )
     return LoadedRows(rows=rows, local_timestamp_adjustment_ns=adjustment)
 
 

@@ -1,4 +1,4 @@
-"""Canonical physical contract for compact ``bbo_v1`` rows."""
+"""Canonical physical contract for compact ``bbo_v2`` rows."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import pyarrow as pa
 from ..errors import ArrowDataError
 
 
-COMPACT_SCHEMA_VERSION = "bbo_v1"
+COMPACT_SCHEMA_VERSION = "bbo_v2"
 
 PHYSICAL_FIELDS: tuple[tuple[str, pa.DataType], ...] = (
     ("source_seq", pa.uint64()),
@@ -22,6 +22,7 @@ PHYSICAL_FIELDS: tuple[tuple[str, pa.DataType], ...] = (
     ("ask_qty", pa.float64()),
     ("last_px", pa.float64()),
     ("total_volume", pa.int64()),
+    ("tradable", pa.uint8()),
 )
 
 BBO_SCHEMA = pa.schema(PHYSICAL_FIELDS)
@@ -37,6 +38,7 @@ SLIM_ROW_DTYPE = np.dtype(
         ("ask_qty", "f8"),
         ("last_px", "f8"),
         ("total_volume", "i8"),
+        ("tradable", "u1"),
     ],
     align=True,
 )
@@ -88,7 +90,7 @@ def validate_bbo_schema(schema: pa.Schema, path: Path | None = None) -> None:
                 f"compact Arrow field {actual.name!r} in {label} has incompatible type/nullability "
                 f"{actual.type}/{actual.nullable}; expected {expected.type}/{expected.nullable}"
             )
-    raise ArrowDataError(f"{label} does not match the canonical bbo_v1 schema")
+    raise ArrowDataError(f"{label} does not match the canonical bbo_v2 schema")
 
 
 def validate_schema_metadata(

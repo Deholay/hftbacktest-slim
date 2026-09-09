@@ -19,6 +19,7 @@ PHYSICAL_SCHEMA = pa.schema(
         ("ask_qty", pa.float64()),
         ("last_px", pa.float64()),
         ("total_volume", pa.int64()),
+        ("tradable", pa.uint8()),
     ]
 )
 
@@ -38,11 +39,15 @@ def write_partition() -> Callable[..., Path]:
         *,
         adjustment_ns: int | None = 0,
         schema: pa.Schema = PHYSICAL_SCHEMA,
-        schema_version: str | None = "bbo_v1",
+        schema_version: str | None = "bbo_v2",
     ) -> Path:
-        table = pa.Table.from_pylist(
-            [dict(zip(schema.names, row)) for row in rows], schema=schema
-        )
+        values = []
+        for row in rows:
+            value = dict(zip(schema.names, row))
+            if "tradable" in schema.names and "tradable" not in value:
+                value["tradable"] = 1
+            values.append(value)
+        table = pa.Table.from_pylist(values, schema=schema)
         metadata: dict[bytes, bytes] = {}
         if schema_version is not None:
             metadata[b"schema_version"] = schema_version.encode()

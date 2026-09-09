@@ -28,20 +28,22 @@ EXPECTED_FIELDS = (
     ("ask_qty", pa.float64()),
     ("last_px", pa.float64()),
     ("total_volume", pa.int64()),
+    ("tradable", pa.uint8()),
 )
 
 
 def test_canonical_schema_and_native_dtype_are_one_exact_contract() -> None:
-    assert COMPACT_SCHEMA_VERSION == "bbo_v1"
+    assert COMPACT_SCHEMA_VERSION == "bbo_v2"
     assert PHYSICAL_FIELDS == EXPECTED_FIELDS
     assert [(field.name, field.type, field.nullable) for field in BBO_SCHEMA] == [
         (name, data_type, True) for name, data_type in EXPECTED_FIELDS
     ]
     assert SLIM_ROW_DTYPE.names == tuple(BBO_SCHEMA.names)
-    assert [SLIM_ROW_DTYPE.fields[name][1] for name in BBO_SCHEMA.names] == list(
-        range(0, 72, 8)
-    )
-    assert SLIM_ROW_DTYPE.itemsize == 72
+    assert [SLIM_ROW_DTYPE.fields[name][1] for name in BBO_SCHEMA.names] == [
+        *range(0, 72, 8),
+        72,
+    ]
+    assert SLIM_ROW_DTYPE.itemsize == 80
     assert SLIM_ROW_DTYPE.isalignedstruct
 
 
@@ -129,3 +131,4 @@ def test_generic_audit_preserves_corrected_latency_and_raw_price_facts(
     assert facts["min_price"] == 77.90
     assert facts["max_price"] == 78.05
     assert facts["trade_events"] == 1
+    assert facts["non_tradable_rows"] == 0

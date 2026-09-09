@@ -34,7 +34,7 @@
       "ask_size_col": "ask_volume1",
       "last_col": "last_price",
       "status_col": "status",
-      "filter_trial_status": false,
+      "filter_trial_status": true,
       "default_size": 1
     },
     "futures": {
@@ -47,7 +47,7 @@
       "ask_size_col": "ask_volume1",
       "last_col": "last_price",
       "status_col": "status",
-      "filter_trial_status": true,
+      "filter_trial_status": false,
       "session_start_time": "09:00:00",
       "session_end_time": "13:25:00",
       "default_size": 1

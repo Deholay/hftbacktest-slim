@@ -9,6 +9,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from scripts.tw_market_status import (
+    expand_taifex_status_columns,
+    expand_twse_status_columns,
+)
+
 from .models import (
     AppConfig,
     FubonLoginConfig,
@@ -2094,39 +2099,15 @@ class HistoricalQuoteEvent:
     quote: Quote
 
 
+def quote_is_twse_trial(quote: Quote | None) -> bool:
+    if quote is None or quote.raw is None:
+        return False
+    return bool(quote.raw.get("status_trial_status_tag", 0))
+
+
 def latency_raw_prefix(source: str, symbol: str, offset_ms: float) -> str:
     offset_text = f"{offset_ms:g}".replace(".", "p")
     return f"latency_{source}_{symbol}_{offset_text}ms"
-
-
-def expand_twse_status_columns(df: Any, status_col: str = "status", prefix: str = "status_") -> Any:
-    import numpy as np
-
-    s = df[status_col].to_numpy(dtype=np.uint32, copy=False)
-
-    return df.assign(
-        **{
-            f"{prefix}raw_status": s,
-            f"{prefix}data_flag": (s & np.uint32(0xFF)).astype(np.uint8),
-            f"{prefix}disclosure_tag": (s & np.uint32(0b00000001)).astype(np.uint8),
-            f"{prefix}ask_level": ((s >> np.uint32(1)) & np.uint32(0b00000111)).astype(np.uint8),
-            f"{prefix}bid_level": ((s >> np.uint32(4)) & np.uint32(0b00000111)).astype(np.uint8),
-            f"{prefix}is_traded": ((s >> np.uint32(7)) & np.uint32(0b00000001)).astype(np.uint8),
-            f"{prefix}limit_flag": ((s >> np.uint32(8)) & np.uint32(0xFF)).astype(np.uint8),
-            f"{prefix}price_tag": ((s >> np.uint32(8)) & np.uint32(0b00000011)).astype(np.uint8),
-            f"{prefix}best_ask": ((s >> np.uint32(10)) & np.uint32(0b00000011)).astype(np.uint8),
-            f"{prefix}best_bid": ((s >> np.uint32(12)) & np.uint32(0b00000011)).astype(np.uint8),
-            f"{prefix}limit_tag": ((s >> np.uint32(14)) & np.uint32(0b00000011)).astype(np.uint8),
-            f"{prefix}data_status": ((s >> np.uint32(16)) & np.uint32(0xFF)).astype(np.uint8),
-            f"{prefix}reserve": ((s >> np.uint32(16)) & np.uint32(0b00000011)).astype(np.uint8),
-            f"{prefix}close_tag": ((s >> np.uint32(18)) & np.uint32(0b00000001)).astype(np.uint8),
-            f"{prefix}open_tag": ((s >> np.uint32(19)) & np.uint32(0b00000001)).astype(np.uint8),
-            f"{prefix}match_tag": ((s >> np.uint32(20)) & np.uint32(0b00000001)).astype(np.uint8),
-            f"{prefix}close_delay_tag": ((s >> np.uint32(21)) & np.uint32(0b00000001)).astype(np.uint8),
-            f"{prefix}open_delay_tag": ((s >> np.uint32(22)) & np.uint32(0b00000001)).astype(np.uint8),
-            f"{prefix}trial_status_tag": ((s >> np.uint32(23)) & np.uint32(0b00000001)).astype(np.uint8),
-        }
-    )
 
 
 class HistoricalReplayEventCache:
@@ -2221,7 +2202,11 @@ class HistoricalParquetReplayProvider:
             future = future_quotes.get(pair.future_symbol)
 
         missing = []
-        if spot is None:
+        stock_trial_blocked = (
+            self.config.historical.stock.filter_trial_status
+            and quote_is_twse_trial(spot)
+        )
+        if spot is None or stock_trial_blocked:
             missing.append(f"stock:{pair.spot_symbol}")
         if future is None:
             missing.append(f"future:{pair.future_symbol}")
@@ -2364,8 +2349,8 @@ class HistoricalParquetReplayProvider:
                 return value
         return None
 
-    @staticmethod
     def _quote_from_timelines_at(
+        self,
         timelines: dict[tuple[str, str], tuple[list[Any], list[Quote]]],
         source: str,
         symbol: str,
@@ -2386,6 +2371,12 @@ class HistoricalParquetReplayProvider:
         if index < 0:
             return None
         quote_timestamp = timestamps[index]
+        if (
+            source == "stock"
+            and self.config.historical.stock.filter_trial_status
+            and quote_is_twse_trial(quotes[index])
+        ):
+            return None
         try:
             age_ms = (target_timestamp - quote_timestamp).total_seconds() * 1_000
         except Exception:
@@ -2410,6 +2401,14 @@ class HistoricalParquetReplayProvider:
     ) -> list[HistoricalQuoteEvent]:
         if not source_config.path:
             raise ValueError(f"historical.{source}.path is required for REPLAY mode")
+        if (
+            source == "stock"
+            and source_config.filter_trial_status
+            and not source_config.status_col
+        ):
+            raise ValueError(
+                "historical.stock.status_col is required when trial-status trading is disabled"
+            )
 
         try:
             import pandas as pd
@@ -2466,14 +2465,26 @@ class HistoricalParquetReplayProvider:
             df = pd.read_parquet(path, columns=read_cols)
             df = df[df[source_config.symbol_col].astype(str).isin(symbols)]
 
-        if source_config.status_col:
-            df = expand_twse_status_columns(df, status_col=source_config.status_col, prefix="status_")
-        if source_config.filter_trial_status and source_config.status_col:
-            before = len(df)
-            df = df[df["status_trial_status_tag"] == 0]
+        if source_config.status_col and source == "stock":
+            df = expand_twse_status_columns(
+                df.fillna({source_config.status_col: 0}),
+                status_col=source_config.status_col,
+                prefix="status_",
+            )
+        elif source_config.status_col and source == "future":
+            df = expand_taifex_status_columns(
+                df.fillna({source_config.status_col: 0}),
+                status_col=source_config.status_col,
+                prefix="status_",
+            )
+            if source_config.filter_trial_status:
+                logging.warning(
+                    "historical.future.filter_trial_status is ignored because TAIFEX status has no trial-status bit"
+                )
+        if source_config.filter_trial_status and source_config.status_col and source == "stock":
             logging.info(
-                "filtered %s %s trial-status rows from %s",
-                before - len(df),
+                "marked %s %s trial-status rows non-tradable from %s",
+                int(df["status_trial_status_tag"].sum()),
                 source,
                 path,
             )
@@ -2512,7 +2523,10 @@ class HistoricalParquetReplayProvider:
             symbol = str(row_data[source_config.symbol_col])
             bid = float(row_data[source_config.bid_col])
             ask = float(row_data[source_config.ask_col])
-            if bid <= 0 or ask <= 0:
+            trial = source == "stock" and bool(
+                row_data.get("status_trial_status_tag", 0)
+            )
+            if (bid <= 0 or ask <= 0) and not trial:
                 continue
             bid_size = self._row_value(row_data, source_config.bid_size_col, source_config.default_size)
             ask_size = self._row_value(row_data, source_config.ask_size_col, source_config.default_size)
@@ -2599,6 +2613,7 @@ class HistoricalParquetReplayProvider:
                     old_stock is None
                     or old_stock.bid != new_stock.bid
                     or old_stock.ask != new_stock.ask
+                    or quote_is_twse_trial(old_stock) != quote_is_twse_trial(new_stock)
                 )
                 if price_changed:
                     self._enrich_latency_trigger_quote("stock", stock_symbol, new_stock)

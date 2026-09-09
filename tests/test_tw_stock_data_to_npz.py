@@ -10,12 +10,21 @@ import numpy as np
 import polars as pl
 
 from scripts.tw_stock_data_to_npz import (
+    BUY_EVENT,
+    DEPTH_CLEAR_EVENT,
+    DEPTH_SNAPSHOT_EVENT,
     EVENT_DTYPE,
+    EVENT_FLAG_MASK,
+    EXCH_EVENT,
+    LOCAL_EVENT,
+    SELL_EVENT,
+    TRADE_EVENT,
     build_events_from_parquet_frame,
     build_events_from_rows,
     convert_tw_stock_future_batch_to_npz,
     convert_tw_stock_future_to_npz,
     convert_tw_stock_to_npz,
+    event_data_semantics_issue,
     load_daily_parquet_frame,
 )
 
@@ -99,6 +108,46 @@ def sample_rows() -> list[dict[str, object]]:
 
 
 class ParquetConversionTest(unittest.TestCase):
+    def test_twse_conversion_fails_closed_without_packed_status(self) -> None:
+        rows = sample_rows()
+        for row in rows:
+            row.pop("status")
+        args = converter_args()
+
+        with self.assertRaisesRegex(ValueError, "requires status"):
+            build_events_from_rows(rows, args)
+        with self.assertRaisesRegex(ValueError, "requires status"):
+            build_events_from_parquet_frame(pl.DataFrame(rows), args)
+
+    def test_twse_trial_rows_lock_book_and_suppress_trade_inference(self) -> None:
+        rows = sample_rows()
+        rows[1]["status"] = 1 << 23
+        args = converter_args()
+
+        legacy, legacy_stats = build_events_from_rows(rows, args)
+        columnar, columnar_stats = build_events_from_parquet_frame(pl.DataFrame(rows), args)
+
+        np.testing.assert_array_equal(columnar, legacy)
+        self.assertEqual(legacy_stats.non_tradable_rows, 1)
+        self.assertEqual(columnar_stats.non_tradable_rows, 1)
+        kinds = columnar["ev"] & np.uint64(~EVENT_FLAG_MASK & np.iinfo(np.uint64).max)
+        self.assertEqual(int(np.sum(kinds == TRADE_EVENT)), 1)
+        halted = columnar[columnar["exch_ts"] == rows[1]["exchtime"]]
+        self.assertEqual(len(halted), 4)
+        event_types = halted["ev"] & np.uint64(
+            ~(EXCH_EVENT | LOCAL_EVENT) & np.iinfo(np.uint64).max
+        )
+        self.assertEqual(
+            set(event_types.tolist()),
+            {
+                DEPTH_CLEAR_EVENT | BUY_EVENT,
+                DEPTH_SNAPSHOT_EVENT | BUY_EVENT,
+                DEPTH_CLEAR_EVENT | SELL_EVENT,
+                DEPTH_SNAPSHOT_EVENT | SELL_EVENT,
+            },
+        )
+        self.assertEqual(set(halted["px"].tolist()), {78.05})
+
     def test_parquet_column_builder_matches_legacy_row_builder(self) -> None:
         rows = sample_rows()
         args = converter_args()
@@ -168,6 +217,16 @@ class ParquetConversionTest(unittest.TestCase):
                 self.assertEqual(int(saved["event_rows"][0]), len(converted))
                 self.assertEqual(float(saved["min_price"][0]), 77.90)
                 self.assertEqual(float(saved["max_price"][0]), 78.05)
+                self.assertEqual(int(saved["converter_version"][0]), 2)
+                self.assertEqual(int(saved["twse_trial_trading_disabled"][0]), 1)
+            self.assertIsNone(event_data_semantics_issue(output, "stock"))
+
+            legacy = root / "legacy.npz"
+            np.savez(legacy, data=converted)
+            self.assertIn(
+                "predates TWSE trial-match trading protection",
+                event_data_semantics_issue(legacy, "stock") or "",
+            )
 
     def test_future_batch_scans_once_and_matches_single_symbol_conversion(self) -> None:
         rows_a = sample_rows()

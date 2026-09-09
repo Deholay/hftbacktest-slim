@@ -14,6 +14,7 @@ def _raw(path: Path) -> None:
         "symbol": ["0050"],
         "exchtime": [100],
         "localtime": [110],
+        "status": [0],
         "last_price": [77.95],
         "total_volume": [1],
     }

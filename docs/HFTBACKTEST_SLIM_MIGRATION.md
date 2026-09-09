@@ -21,6 +21,15 @@ the futures/spot runner exposes the new behavior only through an explicit
 slim-only `event` clock identity. Compact schema `bbo_v1` and builder version
 `2` are unchanged.
 
+Trial-match semantic extension (2026-09-08): package `0.5.0`, Rust
+crate/engine `0.4.0`, native ABI `3`, compact schema `bbo_v2`, and builder
+version `3` add the per-row `tradable` state. TWSE stock/ETF/odd-lot rows with
+`trial_status_tag=1` clear both slim books and cannot match until a later
+tradable row arrives. The reference compact adapter emits an invalid locked
+book marker for the same interval and suppresses inferred trades. This is a
+versioned semantic change with a distinct result baseline; legacy compact
+caches and stock event NPZ files are not reusable.
+
 For package location, code ownership, public API, and dependency direction,
 this document supersedes older extraction locations in
 `HBT_ACCELERATION_STRATEGY.md`. That strategy document and `AGENTS.md` remain
@@ -47,8 +56,8 @@ contracts, resource limits, parity gates, and benchmark claims.
 - Making slim the default engine as part of the relocation.
 - Expanding slim to passive GTC/GTX, queue models, partial fills, arbitrary
   depth-sensitive strategies, or live trading.
-- Changing the `bbo_v1` physical schema without a separate semantic design and
-  versioned migration.
+- Changing the current compact physical schema without a separate semantic
+  design and versioned migration.
 - Removing the reference engine or compact-to-reference parity bridge.
 
 ## Required dependency direction
@@ -218,7 +227,7 @@ The public API must document the supported profile:
 - no passive queue or arbitrary depth-sensitive behavior.
 
 If another strategy requires Top-5 depth, introduce a separately versioned
-`top5_v1` profile. Do not broaden `bbo_v1` silently.
+`top5_v1` profile. Do not broaden the current BBO schema silently.
 
 ## Migration phases and gates
 

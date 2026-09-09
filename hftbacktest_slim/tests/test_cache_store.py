@@ -33,7 +33,7 @@ def _source(path: Path, *, independent_orders: bool = False) -> None:
         "symbol": ["0050", "0050", "0050", "2330"],
         "exchtime": exchange,
         "localtime": local,
-        "status": ["OK"] * 4,
+        "status": [0] * 4,
         "last_price": [78.00, 77.90, 78.05, 1000.0],
         "total_volume": [30, 10, 20, 1],
     }

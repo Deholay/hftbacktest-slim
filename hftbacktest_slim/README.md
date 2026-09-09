@@ -1,12 +1,12 @@
 # hftbacktest-slim
 
 `hftbacktest-slim` is the project-owned, strategy-neutral compact-BBO data and
-replay runtime. Version `0.4.0` extends the stable Phase 6 public boundary: the canonical
+replay runtime. Version `0.5.0` extends the stable Phase 6 public boundary: the canonical
 schema/native dtype, Top-5 normalization, timestamp ordering, audit, streaming
 cache builder, manifest validation, sidecars, resource controls, publication,
 reader, compact CLIs, and neutral engine API live in this standalone package,
 and `future_spot` now consumes that API through strategy-owned adapters. The native crate
-is version `0.3.0`, engine identity is `rust-0.3.0`, and C ABI version is `2`.
+is version `0.4.0`, engine identity is `rust-0.4.0`, and C ABI version is `3`.
 
 The supported profile is deliberately constrained:
 
@@ -88,7 +88,7 @@ The lazy root API also exposes `aggregate_depth_side` and
 schema/dtype constants for reference adapters. Binding, FFI, hashing,
 manifest-publication, and temporary file helpers remain internal.
 
-`COMPACT_SCHEMA_VERSION` remains `bbo_v1`. Its physical Arrow IPC File/Feather
+`COMPACT_SCHEMA_VERSION` is `bbo_v2`. Its physical Arrow IPC File/Feather
 V2 fields are fixed and nullable in this exact order:
 
 ```text
@@ -101,16 +101,19 @@ bid_qty       float64
 ask_qty       float64
 last_px       float64
 total_volume  int64
+tradable      uint8
 ```
 
-`source_seq` is mandatory. The aligned native `SLIM_ROW_DTYPE` is derived from
-the same package schema module and remains a 72-byte structure. File metadata
+`tradable` is `0` for TWSE `trial_status_tag=1` rows and `1` otherwise. A zero
+value clears both books and keeps matching disabled until a later tradable row
+rebuilds the BBO. `source_seq` is mandatory. The aligned native
+`SLIM_ROW_DTYPE` is derived from the same package schema module and is an
+80-byte structure. File metadata
 records the schema, symbol/source/date, local-timestamp adjustment, and exact
 exchange/local ordering. Empty symbols are valid files with the same schema.
 
-Builder version `2` deliberately invalidates builder-version-1 cache
-identities because implementation ownership and deterministic fingerprints
-moved. The physical fields and matching behavior did not change. A cold date
+Builder version `3` invalidates earlier cache identities because the new
+`tradable` state changes both the physical contract and matching behavior. A cold date
 streams projected Arrow record batches and scans each physical stock/futures
 source once while routing every requested symbol; validated warm reuse performs
 zero payload scans. Source and implementation identity validation uses source
@@ -130,13 +133,13 @@ Installable package commands retain the established arguments and auditable JSON
 ```bash
 hftbacktest-slim-build-cache \
   --date 2026-03-02 \
-  --cache-root data/tw_compact_v1 \
+  --cache-root data/tw_compact_v2 \
   --stock-path /data/twstock_20260302.parquet \
   --spot-symbols 0050 2330
 
 hftbacktest-slim-benchmark-read \
   --date 2026-03-02 \
-  --cache-root data/tw_compact_v1 \
+  --cache-root data/tw_compact_v2 \
   --repetitions 3
 ```
 
@@ -155,7 +158,7 @@ The library is resolved deterministically without a system-basename search:
 
 The library is loaded only when an engine is constructed. Importing
 `hftbacktest_slim` does not load the shared object. `engine.library_path`
-records the resolved diagnostic path. ABI values other than `2` raise
+records the resolved diagnostic path. ABI values other than `3` raise
 `AbiMismatchError` before engine construction.
 
 Build the development artifact from the repository root:
@@ -189,8 +192,9 @@ Strategy pricing, execution policy, carry, capital, and reporting remain
 outside this package.
 
 The final result implementation fingerprint selection intentionally invalidates
-older result manifests. Compact-cache identity is unchanged because schema
-`bbo_v1`, builder version `2`, and the compact implementation are unchanged.
+older result manifests. Version `0.5.0` also invalidates compact-cache identity
+because schema `bbo_v2`, builder version `3`, and trial-match trading semantics
+changed.
 Full-date, complete-month, and multi-date carry parity are recorded in
 `PHASE0_INVENTORY.md`; Phase 6 makes no performance claim.
 

@@ -16,6 +16,7 @@ pub struct BboRow {
     pub ask_qty: f64,
     pub last_px: f64,
     pub total_volume: i64,
+    pub tradable: u8,
 }
 
 #[repr(C)]
@@ -69,7 +70,7 @@ mod tests {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     #[test]
     fn c_abi_layout_matches_the_python_binding() {
-        assert_eq!((size_of::<BboRow>(), align_of::<BboRow>()), (72, 8));
+        assert_eq!((size_of::<BboRow>(), align_of::<BboRow>()), (80, 8));
         assert_eq!(offset_of!(BboRow, source_seq), 0);
         assert_eq!(offset_of!(BboRow, exch_ts), 8);
         assert_eq!(offset_of!(BboRow, local_ts_raw), 16);
@@ -79,6 +80,7 @@ mod tests {
         assert_eq!(offset_of!(BboRow, ask_qty), 48);
         assert_eq!(offset_of!(BboRow, last_px), 56);
         assert_eq!(offset_of!(BboRow, total_volume), 64);
+        assert_eq!(offset_of!(BboRow, tradable), 72);
 
         assert_eq!((size_of::<BboView>(), align_of::<BboView>()), (56, 8));
         assert_eq!(offset_of!(BboView, bid_px), 0);

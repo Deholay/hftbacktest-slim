@@ -80,7 +80,7 @@ python3 future_spot/test/run_full_backtest.py \
   --end-date 2026-05-21 \
   --workers 1 \
   --max-pairs 5 \
-  --compact-cache-root data/tw_compact_v1
+  --compact-cache-root data/tw_compact_v2
 ```
 
 `--engine slim` 會自動選用 `--market-data-cache compact`。首次處理某個日期時，
@@ -124,21 +124,21 @@ python3 future_spot/test/run_full_backtest.py \
 | --- | --- |
 | `hftbacktest_slim/native/src/` | Rust scheduler、BBO state、latency/order state，以及立即 FOK/IOC matching core；依 types、book、scheduler、matcher、engine 與 FFI 職責分割。 |
 | `hftbacktest_slim/src/hftbacktest_slim/engine/` | Neutral `SlimEngine`、`ctypes` ABI binding、Arrow partition reader、lifecycle 與 capability validation。 |
-| `hftbacktest_slim/src/hftbacktest_slim/market_data/` | Canonical `bbo_v1` schema/aligned dtype、Top-5 normalization、timestamp ordering/sidecars 與 generic compact audit。 |
-| `hftbacktest_slim/src/hftbacktest_slim/cache/` | Builder v2 one-scan cache、manifest identity/validation、disk budgets 與 atomic publication。 |
+| `hftbacktest_slim/src/hftbacktest_slim/market_data/` | Canonical `bbo_v2` schema/aligned dtype、TWSE 緩撮交易狀態、Top-5 normalization、timestamp ordering/sidecars 與 generic compact audit。 |
+| `hftbacktest_slim/src/hftbacktest_slim/cache/` | Builder v3 one-scan cache、manifest identity/validation、disk budgets 與 atomic publication。 |
 | `future_spot/arbitrage/execution_port.py`、`reference_execution.py`、`slim_execution.py` | Strategy-owned execution port，以及 reference／neutral slim adapters。 |
 | `future_spot/arbitrage/hbt_backtest.py` | 經由 execution port 執行共用 pair strategy 流程。 |
 | `future_spot/arbitrage/full_market_runner.py` | CLI、compact data 編排、依日期循序留倉、workers、結果持久化與 manifests。 |
 
 Linux 環境會產生 `target/release/libhbt_slim.so`。Compact cache 的預設位置為
-`data/tw_compact_v1/date=YYYYMMDD/source={stock|stock_future}/<symbol>.arrow`。
+`data/tw_compact_v2/date=YYYYMMDD/source={stock|stock_future}/<symbol>.arrow`。
 Python neutral API 可由 `hftbacktest_slim` 匯入 `AssetConfig`、`SlimEngine`、
 `Side`、`TimeInForce`、`BBO_SCHEMA`、`CompactBuildConfig`、
 `CompactCacheStore` 與 `CompactSource`。Native library 依序採用明確的 `library_path`、
 `HFTBACKTEST_SLIM_LIBRARY`、package artifact，以及 root Cargo release artifact；
-package import 本身不會載入 shared library。Compact schema 仍為 `bbo_v1`，builder
-已升為 version `2`，因此 version 1 cache 會保守失效；physical fields 與 matching
-語意均未改變。`future_spot` slim path 直接使用 neutral API；
+package import 本身不會載入 shared library。Compact schema 為 `bbo_v2`，builder
+為 version `3`；新增 `tradable` 欄位，TWSE `trial_status_tag=1` 時清空 BBO 並停止
+matching，直到下一筆可交易行情。舊 compact cache 會保守失效。`future_spot` slim path 直接使用 neutral API；
 `examples/slim_two_asset_strategy/` 以另一個獨立策略驗證相同擴充邊界。這次 integration
 source 變更與 Phase 6 source selection 會使舊 result manifests 失效，但移除舊入口
 本身不會使 compact cache 失效。

@@ -27,7 +27,7 @@ def _source(path: Path) -> None:
         "symbol": ["0050", "2330", "0050", "0050"],
         "exchtime": [200, 100, 100, 300],
         "localtime": [180, 101, 120, 330],
-        "status": ["OK"] * 4,
+        "status": [0] * 4,
         "last_price": [78.0, 1000.0, 77.9, 78.1],
         "total_volume": [20, 1, 10, 30],
     }
@@ -74,7 +74,7 @@ def test_cold_build_is_one_scan_and_warm_build_is_zero_scan(tmp_path: Path) -> N
     raw = tmp_path / "daily.parquet"
     _source(raw)
     store = _store(tmp_path)
-    source = CompactSource("stock", (raw,), ("0050", "2330", "9999"), status_allow=("OK",))
+    source = CompactSource("stock", (raw,), ("0050", "2330", "9999"), status_allow=("0",))
 
     cold = store.build_date("2026-03-02", [source])
     assert cold["cache_state"] == "miss"
@@ -106,6 +106,47 @@ def test_cold_build_is_one_scan_and_warm_build_is_zero_scan(tmp_path: Path) -> N
     assert warm["cache_state"] == "hit"
     assert warm["build_invocation_scan_count"] == 0
     assert warm["sources"]["stock"]["scan_count"] == 1
+
+
+def test_twse_trial_status_is_persisted_as_non_tradable_state(tmp_path: Path) -> None:
+    raw = tmp_path / "daily.parquet"
+    _source(raw)
+    table = pq.read_table(raw)
+    table = table.set_column(
+        table.schema.get_field_index("status"),
+        "status",
+        pa.array([0, 0, 1 << 23, 0], type=pa.uint32()),
+    )
+    pq.write_table(table, raw, row_group_size=2)
+    store = _store(tmp_path)
+
+    manifest = store.build_date(
+        "2026-03-02", [CompactSource("stock", (raw,), ("0050",))]
+    )
+    compact = store.read_symbol("2026-03-02", "stock", "0050")
+
+    assert compact["tradable"].to_pylist() == [1, 0, 1]
+    assert manifest["sources"]["stock"]["non_tradable_rows"] == 1
+    assert manifest["sources"]["stock"]["symbols"]["0050"]["non_tradable_rows"] == 1
+    _, stats = compact_to_reference_events(compact, trade_date="2026-03-02")
+    assert stats.non_tradable_rows == 1
+
+
+def test_twse_compact_build_fails_closed_for_nonpacked_status(tmp_path: Path) -> None:
+    raw = tmp_path / "daily.parquet"
+    _source(raw)
+    table = pq.read_table(raw)
+    table = table.set_column(
+        table.schema.get_field_index("status"),
+        "status",
+        pa.array(["OK"] * table.num_rows),
+    )
+    pq.write_table(table, raw, row_group_size=2)
+
+    with pytest.raises(CompactCacheError, match="packed integer status"):
+        _store(tmp_path).build_date(
+            "2026-03-02", [CompactSource("stock", (raw,), ("0050",))]
+        )
 
 
 def test_corrupt_symbol_or_sidecar_is_not_reusable(tmp_path: Path) -> None:
@@ -206,8 +247,9 @@ def test_reference_adapter_matches_direct_bbo_conversion(tmp_path: Path) -> None
                 .otherwise(0.0)
                 for level in range(1, 6)
             ]
-        ).alias("ask_volume1"),
-    )
+            ).alias("ask_volume1"),
+            pl.lit(1, dtype=pl.UInt8).alias("tradable"),
+        )
     args = type(
         "Args",
         (),

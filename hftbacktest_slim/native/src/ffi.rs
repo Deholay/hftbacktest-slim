@@ -5,7 +5,7 @@ use crate::types::{AssetConfig, BboRow, BboView, OrderView};
 
 #[unsafe(no_mangle)]
 pub extern "C" fn hbt_slim_version() -> u32 {
-    2
+    3
 }
 
 #[unsafe(no_mangle)]

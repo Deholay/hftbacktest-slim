@@ -105,6 +105,11 @@ def hbt_asset_audit(
                 ),
                 "trade_events": int(np.sum(kinds == TRADE_EVENT)),
             }
+        summary["non_tradable_rows"] = (
+            int(np.asarray(archive["non_tradable_rows"]).reshape(-1)[0])
+            if "non_tradable_rows" in archive.files
+            else 0
+        )
 
     if not math.isfinite(min_price) or min_price <= 0:
         tick_size = fallback
@@ -120,7 +125,11 @@ def hbt_asset_audit(
 def quote_from_depth(depth: Any, symbol: str, timestamp: int) -> Quote | None:
     best_bid = float(depth.best_bid)
     best_ask = float(depth.best_ask)
-    if not math.isfinite(best_bid) or not math.isfinite(best_ask):
+    if (
+        not math.isfinite(best_bid)
+        or not math.isfinite(best_ask)
+        or best_bid >= best_ask
+    ):
         return None
     bid_tick = int(depth.best_bid_tick)
     ask_tick = int(depth.best_ask_tick)

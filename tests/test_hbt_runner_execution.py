@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.ipc as ipc
@@ -16,6 +17,7 @@ from future_spot.arbitrage.full_market_runner import (
     balanced_backtest_shards,
     build_compact_event_data,
     compact_asset_audit,
+    ensure_spot_events,
     run_backtests,
 )
 from future_spot.arbitrage.models import PairConfig
@@ -53,6 +55,26 @@ class InlineExecutor:
 
 
 class PersistentExecutorTest(unittest.TestCase):
+    def test_legacy_spot_npz_is_not_reused_without_trial_match_metadata(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy = Path(tmp) / "legacy.npz"
+            np.savez(legacy, data=np.empty(0))
+            args = SimpleNamespace(
+                rebuild_event_data=False,
+                no_convert_missing_event_data=True,
+            )
+            with patch(
+                "future_spot.arbitrage.full_market_runner.expected_event_path",
+                return_value=legacy,
+            ):
+                result = ensure_spot_events(args, "0050", "2026-03-02")
+
+        self.assertIsNone(result.path)
+        self.assertEqual(result.status, "missing")
+        self.assertIn("predates TWSE trial-match trading protection", result.error or "")
+
     def test_strategy_compact_audit_combines_package_facts_with_tick_rules(self) -> None:
         import tempfile
 
@@ -63,20 +85,20 @@ class PersistentExecutorTest(unittest.TestCase):
                     dict(
                         zip(
                             BBO_SCHEMA.names,
-                            (0, 100, 90, 499.5, 500.0, 1.0, 1.0, 499.5, 1),
+                            (0, 100, 90, 499.5, 500.0, 1.0, 1.0, 499.5, 1, 1),
                         )
                     ),
                     dict(
                         zip(
                             BBO_SCHEMA.names,
-                            (1, 110, 105, 500.0, 500.5, 1.0, 1.0, 500.0, 2),
+                            (1, 110, 105, 500.0, 500.5, 1.0, 1.0, 500.0, 2, 1),
                         )
                     ),
                 ],
                 schema=BBO_SCHEMA,
             ).replace_schema_metadata(
                 {
-                    b"schema_version": b"bbo_v1",
+                    b"schema_version": b"bbo_v2",
                     b"local_timestamp_adjustment_ns": b"10",
                 }
             )
@@ -96,6 +118,7 @@ class PersistentExecutorTest(unittest.TestCase):
                 "max_latency_ns": 5,
                 "depth_events": None,
                 "trade_events": 1,
+                "non_tradable_rows": 0,
             },
         )
 
@@ -179,6 +202,12 @@ class PersistentExecutorTest(unittest.TestCase):
         reference_event_paths = _hbt_implementation_paths("reference", "event_npz")
         self.assertFalse(
             any(path.is_relative_to(package_root / "engine") for path in reference_event_paths)
+        )
+        self.assertIn(
+            package_root / "market_data" / "normalize.py", reference_event_paths
+        )
+        self.assertIn(
+            package_root / "market_data" / "status.py", reference_event_paths
         )
         self.assertNotIn(
             Path(__file__).resolve().parents[1]

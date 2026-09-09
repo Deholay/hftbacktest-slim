@@ -149,7 +149,7 @@ Use Arrow IPC File / Feather V2 with LZ4 compression by default. Store one file
 per date, source, and symbol:
 
 ```text
-data/tw_compact_v1/
+data/tw_compact_v2/
 └── date=20260302/
     ├── source=stock/
     │   ├── 2330.arrow
@@ -188,6 +188,12 @@ ask_qty       float64
 last_px       float64
 total_volume  int64
 ```
+
+The versioned `bbo_v2` extension appends `tradable uint8`. TWSE cash-market
+rows whose decoded `trial_status_tag` is set store `tradable=0`; the slim
+runtime clears both books and blocks matching until a later `tradable=1` row.
+The reference adapter must preserve the same non-tradable interval instead of
+dropping the row and exposing a stale pre-halt BBO.
 
 Date, symbol, source kind, schema version, tick metadata, timestamp correction,
 and source fingerprints belong in the file or directory manifest rather than

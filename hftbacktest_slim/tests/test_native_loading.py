@@ -116,7 +116,7 @@ def test_abi_mismatch_is_typed_and_reports_path(
     path = tmp_path / "wrong-abi.so"
     path.touch()
     monkeypatch.setattr(binding.ctypes, "CDLL", lambda _path: _WrongAbiLibrary())
-    with pytest.raises(AbiMismatchError, match=r"expected 2, got 99") as caught:
+    with pytest.raises(AbiMismatchError, match=r"expected 3, got 99") as caught:
         binding.NativeBinding(path)
     assert str(path.resolve()) in str(caught.value)
 

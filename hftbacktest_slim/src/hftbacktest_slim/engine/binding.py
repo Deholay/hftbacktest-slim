@@ -1,4 +1,4 @@
-"""ctypes declarations and instance-owned calls for native ABI version 2."""
+"""ctypes declarations and instance-owned calls for native ABI version 3."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from ..config import AssetConfig
 from ..errors import AbiMismatchError, NativeLibraryError, NativeLibraryNotFoundError
 
 
-NATIVE_ABI_VERSION = 2
+NATIVE_ABI_VERSION = 3
 LIBRARY_ENVIRONMENT_VARIABLE = "HFTBACKTEST_SLIM_LIBRARY"
 
 
@@ -129,7 +129,7 @@ def resolve_library_path(
 
 
 class NativeBinding:
-    """Configured ABI-v1 library handle with no global mutable engine state."""
+    """Configured ABI-v3 library handle with no global mutable engine state."""
 
     def __init__(
         self,

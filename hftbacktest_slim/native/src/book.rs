@@ -13,6 +13,15 @@ pub(crate) struct DepthState {
 }
 
 impl DepthState {
+    fn clear_all(&mut self) {
+        self.bids.clear();
+        self.asks.clear();
+        self.best_bid = None;
+        self.best_ask = None;
+        self.low_bid = None;
+        self.high_ask = None;
+    }
+
     fn depth_below(&self, start: i64) -> Option<i64> {
         let low = self.low_bid?;
         self.bids
@@ -106,6 +115,18 @@ impl DepthState {
     }
 
     pub(crate) fn apply_row(&mut self, row: BboRow, timestamp: i64, tick_size: f64) -> BboView {
+        if row.tradable == 0 {
+            self.clear_all();
+            return BboView {
+                bid_px: f64::NAN,
+                ask_px: f64::NAN,
+                bid_qty: 0.0,
+                ask_qty: 0.0,
+                exch_ts: row.exch_ts,
+                local_ts: timestamp,
+                valid: 0,
+            };
+        }
         let price_tick = |price: f64| {
             (tick_size.is_finite() && tick_size > 0.0 && price.is_finite() && price > 0.0)
                 .then(|| (price / tick_size).round() as i64)
@@ -157,6 +178,7 @@ mod tests {
             ask_qty: qty,
             last_px: bid,
             total_volume: 0,
+            tradable: 1,
         }
     }
 
@@ -169,5 +191,22 @@ mod tests {
         assert!(view.bid_px.is_nan());
         assert_eq!(view.ask_px, 50.0);
         assert_eq!(view.ask_qty, 81.0);
+    }
+
+    #[test]
+    fn nontradable_snapshot_clears_both_sides_until_a_tradable_row_arrives() {
+        let mut depth = DepthState::default();
+        let initial = depth.apply_row(row(0, 100, 100, 49.0, 50.0, 20.0), 100, 1.0);
+        assert_eq!(initial.valid, 1);
+        let mut halted = row(1, 101, 101, 49.0, 50.0, 20.0);
+        halted.tradable = 0;
+        let halted_view = depth.apply_row(halted, 101, 1.0);
+        assert_eq!(halted_view.valid, 0);
+        assert!(halted_view.bid_px.is_nan());
+        assert!(halted_view.ask_px.is_nan());
+        let resumed = depth.apply_row(row(2, 102, 102, 50.0, 51.0, 10.0), 102, 1.0);
+        assert_eq!(resumed.valid, 1);
+        assert_eq!(resumed.bid_px, 50.0);
+        assert_eq!(resumed.ask_px, 51.0);
     }
 }

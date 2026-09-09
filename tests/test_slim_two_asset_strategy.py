@@ -12,9 +12,10 @@ from hftbacktest_slim import AssetConfig, BBO_SCHEMA, OrderStatus
 
 def _write_partition(path: Path, rows: list[tuple]) -> Path:
     table = pa.Table.from_pylist(
-        [dict(zip(BBO_SCHEMA.names, row)) for row in rows], schema=BBO_SCHEMA
+        [dict(zip(BBO_SCHEMA.names, row)) | {"tradable": row[9] if len(row) > 9 else 1} for row in rows],
+        schema=BBO_SCHEMA,
     ).replace_schema_metadata(
-        {b"schema_version": b"bbo_v1", b"local_timestamp_adjustment_ns": b"0"}
+        {b"schema_version": b"bbo_v2", b"local_timestamp_adjustment_ns": b"0"}
     )
     with path.open("wb") as sink, ipc.new_file(sink, table.schema) as writer:
         writer.write_table(table)

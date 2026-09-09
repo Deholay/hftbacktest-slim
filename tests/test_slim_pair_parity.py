@@ -19,8 +19,9 @@ from scripts.tw_stock_hftbacktest import import_hftbacktest
 
 def _compact(path: Path, rows: list[tuple]) -> pa.Table:
     table = pa.Table.from_pylist(
-        [dict(zip(BBO_SCHEMA.names, row)) for row in rows], schema=BBO_SCHEMA
-    ).replace_schema_metadata({b"schema_version": b"bbo_v1", b"local_timestamp_adjustment_ns": b"0"})
+        [dict(zip(BBO_SCHEMA.names, row)) | {"tradable": row[9] if len(row) > 9 else 1} for row in rows],
+        schema=BBO_SCHEMA,
+    ).replace_schema_metadata({b"schema_version": b"bbo_v2", b"local_timestamp_adjustment_ns": b"0"})
     with path.open("wb") as sink, ipc.new_file(sink, table.schema) as writer:
         writer.write_table(table)
     return table
@@ -169,3 +170,69 @@ def test_reference_and_slim_pair_fill_golden_match(tmp_path: Path) -> None:
             pd.concat(reference_frames[table], ignore_index=True),
             pd.concat(slim_frames[table], ignore_index=True),
         )
+
+
+def test_reference_and_slim_do_not_trade_trial_match_only_signal(tmp_path: Path) -> None:
+    spot_arrow = tmp_path / "halted_spot.arrow"
+    future_arrow = tmp_path / "flat_future.arrow"
+    spot_table = _compact(
+        spot_arrow,
+        [
+            (0, 100, 100, 99.0, 101.0, 10.0, 10.0, 100.0, 1, 1),
+            (1, 200, 200, 49.0, 51.0, 10.0, 10.0, 50.0, 2, 0),
+            (2, 300, 300, 99.0, 101.0, 10.0, 10.0, 100.0, 3, 1),
+        ],
+    )
+    future_table = _compact(
+        future_arrow,
+        [
+            (0, 100, 100, 99.0, 101.0, 10.0, 10.0, 100.0, 1, 1),
+            (1, 200, 200, 99.0, 101.0, 10.0, 10.0, 100.0, 2, 1),
+            (2, 300, 300, 99.0, 101.0, 10.0, 10.0, 100.0, 3, 1),
+        ],
+    )
+    spot_events, _ = compact_to_reference_events(
+        spot_table, trade_date="2026-03-02"
+    )
+    future_events, _ = compact_to_reference_events(
+        future_table, trade_date="2026-03-02"
+    )
+    spot_npz = tmp_path / "halted_spot.npz"
+    future_npz = tmp_path / "flat_future.npz"
+    np.savez(spot_npz, data=spot_events)
+    np.savez(future_npz, data=future_events)
+
+    pair = _pair()
+    common = dict(
+        pair=pair,
+        first_leg="future",
+        step_ns=100,
+        response_timeout_ns=20,
+        max_steps=4,
+        max_trades=1,
+        second_leg_profit_check=True,
+        record_market_every_steps=None,
+        strategy_engine="python",
+    )
+    reference = HbtPairBacktestConfig(
+        **common,
+        spot=HbtAssetConfig("A", spot_npz, "stock", 1000.0, tick_size=1.0),
+        future=HbtAssetConfig("AF", future_npz, "future", 1000.0, tick_size=1.0),
+        execution_engine="reference",
+    )
+    slim = replace(
+        reference,
+        spot=replace(reference.spot, data=spot_arrow),
+        future=replace(reference.future, data=future_arrow),
+        execution_engine="slim",
+    )
+
+    reference_trades, reference_summary = HbtPairBacktester(
+        reference, hbtpkg=import_hftbacktest(Path(__file__).resolve().parents[1])
+    ).run()
+    slim_trades, slim_summary = HbtPairBacktester(slim).run()
+
+    assert reference_trades.empty
+    assert slim_trades.empty
+    assert int(reference_summary.iloc[0]["rows"]) == 0
+    assert int(slim_summary.iloc[0]["rows"]) == 0

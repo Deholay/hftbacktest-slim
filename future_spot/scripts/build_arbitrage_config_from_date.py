@@ -9,12 +9,14 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+WORKSPACE_ROOT = PROJECT_ROOT.parent
+for path in (WORKSPACE_ROOT, PROJECT_ROOT):
+    text = str(path)
+    if text not in sys.path:
+        sys.path.insert(0, text)
 
 from arbitrage.config import load_config  # noqa: E402
 from arbitrage.providers import FubonMarketDataProvider  # noqa: E402
@@ -26,6 +28,7 @@ from arbitrage.utils import (  # noqa: E402
     read_float_attr,
     read_int_attr,
 )
+from scripts.tw_market_status import expand_taifex_status_columns  # noqa: E402
 
 
 PRODUCT_KEYS = {"name", "spot_symbol", "future_symbol"}
@@ -337,13 +340,7 @@ def build_futures_session_ohlcv(path: Path, session_start: str, session_end: str
 
 
 def add_future_status_columns(df: pd.DataFrame) -> pd.DataFrame:
-    status = df["status"].fillna(0).to_numpy(dtype=np.uint32, copy=False)
-    return df.assign(
-        build_type=(status & np.uint32(0xFF)).astype(np.uint8),
-        match_flag=((status >> np.uint32(8)) & np.uint32(0xFF)).astype(np.uint8),
-        orderbook_action=((status >> np.uint32(16)) & np.uint32(0xFF)).astype(np.uint8),
-        continuous_flag=((status >> np.uint32(24)) & np.uint32(0xFF)).astype(np.uint8),
-    )
+    return expand_taifex_status_columns(df.fillna({"status": 0}), prefix="")
 
 
 def build_future_ohlcv(ticks: pd.DataFrame, start_time: str, end_time: str) -> pd.DataFrame:

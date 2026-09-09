@@ -385,6 +385,7 @@ mod tests {
             ask_qty: qty,
             last_px: bid,
             total_volume: 0,
+            tradable: 1,
         }
     }
 
