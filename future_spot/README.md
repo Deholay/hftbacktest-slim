@@ -133,6 +133,24 @@ required. Full mode must also declare a hard retained-row budget with
 `--full-report-max-rows`; batch size remains configurable with
 `--report-chunk-rows`.
 
+For a daily opportunity-only run, use:
+
+```bash
+python future_spot/test/run_full_backtest.py \
+  --start-date 2026-09-08 \
+  --end-date 2026-09-08 \
+  --report-mode daily
+```
+
+Daily mode disables cross-date position carry, detailed/capital/stuck-cash
+reports, per-pair entry/exit output, periodic market sampling, and figures. Its
+only report CSV is `daily_backtest_summary.csv`, containing filled rows with
+`run_key`, readable event time, signal, spot/futures BBO, and exact raw exchange
+timestamps for the stock and futures BBO ticks. Required daily config, target,
+event, or compact cache inputs may still be created or reused by the backtest
+pipeline. Order-state timestamps remain available only in the full trade audit
+and must not be used as raw-market lookup keys.
+
 Run from the Poetry project under `data_platform_client`:
 
 ```bash

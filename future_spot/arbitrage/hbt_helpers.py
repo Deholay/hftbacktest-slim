@@ -122,7 +122,12 @@ def hbt_asset_audit(
     return tick_size, summary
 
 
-def quote_from_depth(depth: Any, symbol: str, timestamp: int) -> Quote | None:
+def quote_from_depth(
+    depth: Any,
+    symbol: str,
+    timestamp: int,
+    feed_latency: tuple[int, int] | None = None,
+) -> Quote | None:
     best_bid = float(depth.best_bid)
     best_ask = float(depth.best_ask)
     if (
@@ -133,13 +138,17 @@ def quote_from_depth(depth: Any, symbol: str, timestamp: int) -> Quote | None:
         return None
     bid_tick = int(depth.best_bid_tick)
     ask_tick = int(depth.best_ask_tick)
+    raw = {"exchtime": int(timestamp), "timestamp": int(timestamp), "source": "hbt"}
+    if feed_latency is not None:
+        raw["bbo_exch_timestamp"] = int(feed_latency[0])
+        raw["bbo_local_timestamp"] = int(feed_latency[1])
     return Quote(
         symbol=symbol,
         bid=best_bid,
         ask=best_ask,
         bid_size=float(depth.bid_qty_at_tick(bid_tick)),
         ask_size=float(depth.ask_qty_at_tick(ask_tick)),
-        raw={"exchtime": int(timestamp), "timestamp": int(timestamp), "source": "hbt"},
+        raw=raw,
     )
 
 

@@ -10,6 +10,7 @@ from .full_market_runner import (
     add_run_columns,
     attach_entry_signals,
     build_cash_roi_outputs,
+    build_daily_backtest_summary,
     build_entry_exit_frame,
     build_entry_exit_outputs,
     build_locked_roi_outputs,

@@ -182,6 +182,44 @@ class HbtRunOutputs:
     stage_timings: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
+DAILY_BACKTEST_SUMMARY_COLUMNS = (
+    "run_key",
+    "timestamp_tw",
+    "signal",
+    "spot_ask",
+    "spot_bid",
+    "future_ask",
+    "future_bid",
+    "spot_tick_exch_timestamp",
+    "future_tick_exch_timestamp",
+)
+
+
+def configure_report_mode(args: argparse.Namespace) -> argparse.Namespace:
+    """Apply behavior implied by specialized report modes."""
+    if getattr(args, "report_mode", "summary") == "daily":
+        args.carry_positions = False
+        args.no_plots = True
+        args.skip_entry_exit_by_pair = True
+        args.skip_detailed_reports = True
+        args.record_market_every_steps = 0
+    return args
+
+
+def build_daily_backtest_summary(trades: pd.DataFrame) -> pd.DataFrame:
+    """Return only filled opportunities and the compact daily audit columns."""
+    columns = list(DAILY_BACKTEST_SUMMARY_COLUMNS)
+    if trades.empty or "status" not in trades.columns:
+        return pd.DataFrame(columns=columns)
+    filled = trades.loc[trades["status"].eq("FILLED")]
+    if filled.empty:
+        return pd.DataFrame(columns=columns)
+    missing = [name for name in columns if name not in filled.columns]
+    if missing:
+        raise KeyError(f"daily backtest summary is missing columns: {missing}")
+    return filled.loc[:, columns].reset_index(drop=True)
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -400,9 +438,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--report-mode",
-        choices=("summary", "full"),
+        choices=("daily", "summary", "full"),
         default="summary",
-        help="Summary omits large diagnostic detail tables; full builds them from bounded chunks.",
+        help=(
+            "Daily writes only daily_backtest_summary.csv with filled opportunities and disables "
+            "carry/reports/plots; summary omits large diagnostic tables; full builds bounded details."
+        ),
     )
     parser.add_argument(
         "--full-report-max-rows",
@@ -435,7 +476,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.full_report_max_rows is None or args.full_report_max_rows <= 0
     ):
         parser.error("--report-mode full requires a positive --full-report-max-rows budget")
-    return args
+    return configure_report_mode(args)
 
 
 def main() -> int:
@@ -454,8 +495,19 @@ def main() -> int:
         excluded_dates=args.excluded_dates,
     )
     base_records, build_status = build_daily_pair_records(args, trade_dates)
-    write_csv(build_status, args.output_dir / "daily_config_build_status.csv")
     outputs = execute_hbt_runs(args, base_records, trade_dates)
+    if args.report_mode == "daily":
+        if not outputs.run_errors.empty:
+            raise RuntimeError(
+                f"daily report aborted because {len(outputs.run_errors)} backtest errors occurred"
+            )
+        daily_summary = build_daily_backtest_summary(outputs.trades)
+        output = args.output_dir / "daily_backtest_summary.csv"
+        write_csv(daily_summary, output)
+        logging.info("daily opportunity report rows=%s output=%s", len(daily_summary), output)
+        return 0
+
+    write_csv(build_status, args.output_dir / "daily_config_build_status.csv")
     records = outputs.records
     pair_universe = pair_universe_frame(records)
     write_csv(pair_universe, args.output_dir / "daily_pair_universe.csv")
@@ -537,8 +589,11 @@ def resolve_output_dir(args: argparse.Namespace) -> Path:
     clock_suffix = (
         "_clock_event" if getattr(args, "strategy_clock", "step") == "event" else ""
     )
+    report_suffix = (
+        "_report_daily" if getattr(args, "report_mode", "summary") == "daily" else ""
+    )
     return PROJECT_ROOT / "output" / (
-        f"hbt_daily_full_market_{start}_{end}_{latency_suffix}{clock_suffix}"
+        f"hbt_daily_full_market_{start}_{end}_{latency_suffix}{clock_suffix}{report_suffix}"
     )
 
 

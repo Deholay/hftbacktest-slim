@@ -31,6 +31,14 @@ def main() -> int:
     args = prepare_args(parse_args())
     logging.basicConfig(level=getattr(logging, args.log_level), format="%(asctime)s %(levelname)s %(message)s")
     artifacts = run_backtest_pipeline(args)
+    if args.report_mode == "daily":
+        logging.info(
+            "done dates=%s pairs=%s daily_report=%s",
+            len(artifacts.trade_dates),
+            len(artifacts.records),
+            artifacts.output_dir / "daily_backtest_summary.csv",
+        )
+        return 0
     reports = build_report_tables(artifacts)
     figures = {} if args.no_plots else save_report_plots(artifacts, reports)
     logging.info(

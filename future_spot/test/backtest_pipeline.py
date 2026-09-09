@@ -79,6 +79,27 @@ def run_backtest_pipeline(args: Namespace) -> BacktestArtifacts:
     run_errors = outputs.run_errors
     conversion_status = outputs.conversion_status
     settings = outputs.settings
+    if getattr(args, "report_mode", "summary") == "daily":
+        if not run_errors.empty:
+            raise RuntimeError(
+                f"daily report aborted because {len(run_errors)} backtest errors occurred"
+            )
+        daily_summary = reporting.build_daily_backtest_summary(trades)
+        reporting.write_csv(
+            daily_summary,
+            args.output_dir / "daily_backtest_summary.csv",
+        )
+        frames = {
+            "daily_backtest_summary": daily_summary,
+            "run_errors": run_errors,
+        }
+        logging.info(
+            "daily opportunity report rows=%s output=%s",
+            len(daily_summary),
+            args.output_dir / "daily_backtest_summary.csv",
+        )
+        return BacktestArtifacts(args, trade_dates, records, event_paths, pair_results, frames)
+
     pair_universe = daily_pipeline.pair_universe_frame(records)
     stage_started = time.perf_counter()
     _write_frames(args.output_dir, {

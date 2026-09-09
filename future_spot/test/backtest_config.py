@@ -13,7 +13,12 @@ for _path in (PROJECT_ROOT, WORKSPACE_ROOT, PROJECT_ROOT / "scripts"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from arbitrage.full_market_runner import parse_args, resolve_output_dir, resolve_project_path  # noqa: E402
+from arbitrage.full_market_runner import (  # noqa: E402
+    configure_report_mode,
+    parse_args,
+    resolve_output_dir,
+    resolve_project_path,
+)
 
 
 def default_notebook_args(**overrides: Any) -> Namespace:
@@ -66,6 +71,7 @@ def default_notebook_args(**overrides: Any) -> Namespace:
 
 def prepare_args(args: Namespace) -> Namespace:
     """Resolve project-relative paths and create the configured output folder."""
+    args = configure_report_mode(args)
     if args.engine == "slim":
         args.market_data_cache = "compact"
     if getattr(args, "strategy_clock", "step") == "event" and args.engine != "slim":

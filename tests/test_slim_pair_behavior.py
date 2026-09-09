@@ -114,6 +114,10 @@ def test_crossing_legs_preserve_sequence_position_and_audit_rows(tmp_path: Path)
     assert row["first_side"] == "sell"
     assert row["second_leg"] == "stock"
     assert row["second_side"] == "buy"
+    assert row["spot_tick_exch_timestamp"] == 100
+    assert row["spot_tick_local_timestamp"] == 110
+    assert row["future_tick_exch_timestamp"] == 100
+    assert row["future_tick_local_timestamp"] == 110
     assert row["signal_timestamp"] == 110
     assert row["completion_timestamp"] == 110
     assert summary.loc[0, "final_quantity"] == 1

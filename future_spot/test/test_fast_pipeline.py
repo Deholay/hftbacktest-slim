@@ -19,6 +19,7 @@ for _path in (TEST_ROOT, PROJECT_ROOT, WORKSPACE_ROOT, PROJECT_ROOT / "scripts")
 
 from arbitrage.full_market_runner import (
     attach_entry_signals,
+    build_daily_backtest_summary,
     build_pair_hbt_config,
     leg_latency_ms,
     filter_excluded_run_records,
@@ -123,6 +124,59 @@ class FastPipelineTest(unittest.TestCase):
             ["--report-mode", "full", "--full-report-max-rows", "100000"]
         )
         self.assertEqual(args.full_report_max_rows, 100_000)
+
+    def test_daily_report_mode_disables_carry_details_and_plots(self) -> None:
+        args = parse_args(["--report-mode", "daily"])
+
+        self.assertFalse(args.carry_positions)
+        self.assertTrue(args.no_plots)
+        self.assertTrue(args.skip_entry_exit_by_pair)
+        self.assertTrue(args.skip_detailed_reports)
+        self.assertEqual(args.record_market_every_steps, 0)
+        self.assertTrue(resolve_output_dir(args).name.endswith("_report_daily"))
+
+    def test_daily_backtest_summary_keeps_only_filled_requested_columns(self) -> None:
+        spot_tick_ts = 1_788_829_202_263_735_000
+        future_tick_ts = 1_788_829_202_263_000_000
+        trades = pd.DataFrame(
+            {
+                "run_key": ["skip", "filled"],
+                "timestamp_tw": ["skip-time", "filled-time"],
+                "signal": ["EXIT", "ENTER_LONG_SPOT_SHORT_FUTURE"],
+                "status": ["RISK_SKIP", "FILLED"],
+                "spot_ask": [311.0, 313.0],
+                "spot_bid": [310.5, 312.0],
+                "future_ask": [312.5, 320.0],
+                "future_bid": [309.5, 315.0],
+                "spot_tick_exch_timestamp": pd.Series(
+                    [pd.NA, spot_tick_ts], dtype="Int64"
+                ),
+                "future_tick_exch_timestamp": pd.Series(
+                    [pd.NA, future_tick_ts], dtype="Int64"
+                ),
+                "unused": [1, 2],
+            }
+        )
+
+        result = build_daily_backtest_summary(trades)
+
+        self.assertEqual(
+            result.columns.tolist(),
+            [
+                "run_key",
+                "timestamp_tw",
+                "signal",
+                "spot_ask",
+                "spot_bid",
+                "future_ask",
+                "future_bid",
+                "spot_tick_exch_timestamp",
+                "future_tick_exch_timestamp",
+            ],
+        )
+        self.assertEqual(result["run_key"].tolist(), ["filled"])
+        self.assertEqual(result.loc[0, "spot_tick_exch_timestamp"], spot_tick_ts)
+        self.assertEqual(result.loc[0, "future_tick_exch_timestamp"], future_tick_ts)
 
     def test_run_key_exclusion_removes_exact_record(self) -> None:
         records = [

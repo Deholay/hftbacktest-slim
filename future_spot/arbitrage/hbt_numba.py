@@ -227,7 +227,8 @@ def scan_until_wakeup(
     """Advance through HOLD steps until Python has meaningful work to do.
 
     ``remaining_steps`` uses ``-1`` for unlimited. The returned tuple is
-    ``(reason, absolute_step, signal_code, timestamp, eight BBO values)``.
+    ``(reason, absolute_step, signal_code, timestamp, eight BBO values,
+    spot/future exchange/local feed timestamps)``.
     The BBO snapshot preserves the final successful Python step because a
     failed end-of-data ``elapse`` may still mutate HBT's visible depth.
     """
@@ -242,6 +243,10 @@ def scan_until_wakeup(
     last_future_ask = math.nan
     last_future_bid_size = math.nan
     last_future_ask_size = math.nan
+    last_spot_exch_timestamp = -1
+    last_spot_local_timestamp = -1
+    last_future_exch_timestamp = -1
+    last_future_local_timestamp = -1
     while remaining_steps < 0 or advanced < remaining_steps:
         if hbt.elapse(step_ns) != 0:
             return (
@@ -257,6 +262,10 @@ def scan_until_wakeup(
                 last_future_ask,
                 last_future_bid_size,
                 last_future_ask_size,
+                last_spot_exch_timestamp,
+                last_spot_local_timestamp,
+                last_future_exch_timestamp,
+                last_future_local_timestamp,
             )
         step += 1
         advanced += 1
@@ -285,6 +294,12 @@ def scan_until_wakeup(
         last_future_ask = future_ask
         last_future_bid_size = future_depth.bid_qty_at_tick(future_depth.best_bid_tick)
         last_future_ask_size = future_depth.ask_qty_at_tick(future_depth.best_ask_tick)
+        spot_feed_latency = hbt.feed_latency(0)
+        future_feed_latency = hbt.feed_latency(1)
+        if spot_feed_latency is not None:
+            last_spot_exch_timestamp, last_spot_local_timestamp = spot_feed_latency
+        if future_feed_latency is not None:
+            last_future_exch_timestamp, last_future_local_timestamp = future_feed_latency
 
         pricing = pricing_values_from_bbo(
             spot_bid,
@@ -330,6 +345,10 @@ def scan_until_wakeup(
                 last_future_ask,
                 last_future_bid_size,
                 last_future_ask_size,
+                last_spot_exch_timestamp,
+                last_spot_local_timestamp,
+                last_future_exch_timestamp,
+                last_future_local_timestamp,
             )
         if record_market_every_steps > 0 and step % record_market_every_steps == 0:
             return (
@@ -345,6 +364,10 @@ def scan_until_wakeup(
                 last_future_ask,
                 last_future_bid_size,
                 last_future_ask_size,
+                last_spot_exch_timestamp,
+                last_spot_local_timestamp,
+                last_future_exch_timestamp,
+                last_future_local_timestamp,
             )
 
     return (
@@ -360,4 +383,8 @@ def scan_until_wakeup(
         last_future_ask,
         last_future_bid_size,
         last_future_ask_size,
+        last_spot_exch_timestamp,
+        last_spot_local_timestamp,
+        last_future_exch_timestamp,
+        last_future_local_timestamp,
     )

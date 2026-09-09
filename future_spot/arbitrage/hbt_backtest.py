@@ -30,6 +30,7 @@ from .hbt_helpers import (
 )
 from .hbt_rows import (
     base_row,
+    execution_rows_frame,
 )
 from .hbt_numba import (
     FUTURE_TICK_SCHEDULE_FROM_TIMESTAMP,
@@ -92,7 +93,7 @@ class HbtPairBacktester:
                 self._run_numba(hbt)
             else:
                 raise ValueError(f"strategy_engine must be 'python' or 'numba': {self.config.strategy_engine}")
-            trades = pd.DataFrame(self.rows)
+            trades = execution_rows_frame(self.rows)
             summary = pd.DataFrame([self._summary_row(trades)])
             return trades, summary
         finally:
@@ -274,7 +275,18 @@ class HbtPairBacktester:
         if not all(value == value for value in values):
             return None
         pair = self.config.pair
-        raw = {"exchtime": timestamp, "timestamp": timestamp, "source": "hbt"}
+        spot_raw = {"exchtime": timestamp, "timestamp": timestamp, "source": "hbt"}
+        future_raw = dict(spot_raw)
+        if int(scan_result[12]) >= 0:
+            spot_raw.update(
+                bbo_exch_timestamp=int(scan_result[12]),
+                bbo_local_timestamp=int(scan_result[13]),
+            )
+        if int(scan_result[14]) >= 0:
+            future_raw.update(
+                bbo_exch_timestamp=int(scan_result[14]),
+                bbo_local_timestamp=int(scan_result[15]),
+            )
         return PairMarket(
             pair=pair,
             spot=Quote(
@@ -283,7 +295,7 @@ class HbtPairBacktester:
                 ask=values[1],
                 bid_size=values[2],
                 ask_size=values[3],
-                raw=raw,
+                raw=spot_raw,
             ),
             future=Quote(
                 symbol=pair.future_symbol,
@@ -291,7 +303,7 @@ class HbtPairBacktester:
                 ask=values[5],
                 bid_size=values[6],
                 ask_size=values[7],
-                raw=raw,
+                raw=future_raw,
             ),
             trigger_source="hbt",
             trigger_symbol=f"{pair.spot_symbol}/{pair.future_symbol}",
@@ -355,8 +367,18 @@ class HbtPairBacktester:
         )
 
     def _current_market(self, hbt) -> PairMarket | None:
-        spot = quote_from_depth(hbt.depth(STOCK_ASSET_NO), self.config.pair.spot_symbol, hbt.current_timestamp)
-        future = quote_from_depth(hbt.depth(FUTURE_ASSET_NO), self.config.pair.future_symbol, hbt.current_timestamp)
+        spot = quote_from_depth(
+            hbt.depth(STOCK_ASSET_NO),
+            self.config.pair.spot_symbol,
+            hbt.current_timestamp,
+            hbt.feed_latency(STOCK_ASSET_NO),
+        )
+        future = quote_from_depth(
+            hbt.depth(FUTURE_ASSET_NO),
+            self.config.pair.future_symbol,
+            hbt.current_timestamp,
+            hbt.feed_latency(FUTURE_ASSET_NO),
+        )
         if spot is None or future is None:
             return None
         return PairMarket(

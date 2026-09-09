@@ -142,6 +142,10 @@ def test_reference_and_slim_pair_fill_golden_match(tmp_path: Path) -> None:
         "second_order_req_local_ts",
         "second_order_exch_ts",
         "second_order_resp_local_ts",
+        "spot_tick_exch_timestamp",
+        "spot_tick_local_timestamp",
+        "future_tick_exch_timestamp",
+        "future_tick_local_timestamp",
     ]
     assert not reference_trades.empty
     assert reference_trades[columns].to_dict("records") == slim_trades[columns].to_dict("records")
