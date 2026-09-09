@@ -151,6 +151,39 @@ event, or compact cache inputs may still be created or reused by the backtest
 pipeline. Order-state timestamps remain available only in the full trade audit
 and must not be used as raw-market lookup keys.
 
+### Daily run with Lark notification (Windows/WSL)
+
+`future_spot/scripts/run_daily_backtest_to_lark.bat` runs the daily report mode
+inside WSL, saves the CSV under
+`Z:\hftbacktest_daily_reports\YYYYMMDD\daily_backtest_summary.csv`, and sends a
+signed summary message to a Lark custom bot. The default date is the latest
+eligible trading date in `Calendar.csv`; an explicit date can be passed as the
+first argument:
+
+```bat
+future_spot\scripts\run_daily_backtest_to_lark.bat 2026-09-08
+```
+
+Keep the webhook credentials out of the repository and command file. Set them
+once in a Windows Command Prompt, then open a new terminal before running the
+batch file:
+
+```bat
+setx LARK_WEBHOOK_URL "PASTE_NEW_LARK_WEBHOOK_URL_HERE"
+setx LARK_WEBHOOK_SECRET "PASTE_NEW_LARK_SIGNING_SECRET_HERE"
+```
+
+The batch file transfers those variables into WSL through `WSLENV`; it does not
+place them in the Python child command. The Python entrypoint also accepts
+`--webhook-url` and `--webhook-secret` for a one-off manual invocation, but
+environment variables are preferred because command-line arguments can be
+visible in process listings.
+
+A custom-bot webhook cannot upload an arbitrary CSV attachment. It sends the
+FILLED count, BBO, full raw tick timestamps, and the saved CSV path. Sending the
+CSV as an actual Lark file requires a tenant app with `app_id`/`app_secret`, the
+IM file-upload permission, and a target chat or user ID.
+
 Run from the Poetry project under `data_platform_client`:
 
 ```bash
