@@ -1,7 +1,10 @@
 """Package-owned compact market-data contracts and transformations."""
 
 from .audit import compact_partition_audit
-from .normalize import normalized_bbo_from_depth_columns
+from .normalize import (
+    normalized_bbo_from_depth_columns,
+    normalized_depth_from_depth_columns,
+)
 from .schema import (
     BBO_SCHEMA_VERSION,
     BBO_SCHEMA,
@@ -47,6 +50,7 @@ __all__ = (
     "expand_twse_status_columns",
     "is_twse_trial_status",
     "normalized_bbo_from_depth_columns",
+    "normalized_depth_from_depth_columns",
     "profile_for_depth_levels",
     "schema_for_depth_levels",
     "schema_version_for_depth_levels",

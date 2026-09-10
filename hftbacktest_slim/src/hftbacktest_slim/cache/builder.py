@@ -1,4 +1,4 @@
-"""One-scan streaming construction of compact per-symbol BBO partitions."""
+"""One-scan streaming construction of compact per-symbol market-depth partitions."""
 
 from __future__ import annotations
 
@@ -15,9 +15,18 @@ import pyarrow.ipc as ipc
 import pyarrow.parquet as pq
 
 from ..errors import CompactCacheError
-from ..market_data.normalize import normalized_bbo_from_depth_columns
+from ..market_data.normalize import (
+    normalized_bbo_from_depth_columns,
+    normalized_depth_from_depth_columns,
+)
 from ..market_data.ordering import timestamp_ordering_facts, write_order_sidecar
-from ..market_data.schema import BBO_SCHEMA, COMPACT_SCHEMA_VERSION, PROJECTED_COLUMNS
+from ..market_data.schema import (
+    BBO_SCHEMA,
+    PROJECTED_COLUMNS,
+    schema_for_depth_levels,
+    schema_version_for_depth_levels,
+    top5_schema_metadata,
+)
 from ..market_data.status import twse_trial_status_mask
 from .config import CompactBuildConfig, CompactSource
 from .manifest import file_sha256
@@ -92,6 +101,7 @@ def build_source(
                 compression=config.compression,
                 base_latency_ns=config.base_latency_ns,
                 non_tradable_rows=state.non_tradable_rows,
+                depth_levels=config.depth_levels,
             )
         else:
             symbol_manifest[symbol] = consolidate_symbol(
@@ -103,6 +113,7 @@ def build_source(
                 compression=config.compression,
                 base_latency_ns=config.base_latency_ns,
                 non_tradable_rows=state.non_tradable_rows,
+                depth_levels=config.depth_levels,
             )
         runtime_budget_check(Path(config.cache_root), temp, config)
     # The target is the specific build-owned parts directory; completed symbol
@@ -149,9 +160,9 @@ def _observe_symbol_state(state: _SymbolState, table: pa.Table) -> None:
         else max(state.last_exch_ts, int(exchange.max()))
     )
     prices = np.concatenate(
-        (
-            table["bid_px"].to_numpy(zero_copy_only=False),
-            table["ask_px"].to_numpy(zero_copy_only=False),
+        tuple(
+            table[name].to_numpy(zero_copy_only=False)
+            for name in _price_column_names(table.schema)
         )
     )
     prices = prices[np.isfinite(prices) & (prices > 0)]
@@ -193,13 +204,13 @@ def compact_batch(
     local = local[keep]
     seq = source_seq[indexes]
     if not len(indexes):
-        return pa.Table.from_batches([], schema=BBO_SCHEMA)
+        return pa.Table.from_batches(
+            [], schema=schema_for_depth_levels(config.depth_levels)
+        )
     bid_prices = matrix(batch, "bid_price", indexes)
     ask_prices = matrix(batch, "ask_price", indexes)
     bid_quantities = matrix(batch, "bid_volume", indexes)
     ask_quantities = matrix(batch, "ask_volume", indexes)
-    bid_px, bid_qty = best_side(bid_prices, bid_quantities, True, source)
-    ask_px, ask_qty = best_side(ask_prices, ask_quantities, False, source)
     last_px = numeric(batch, "last_price", indexes, np.float64, default=np.nan)
     total_volume = numeric(batch, "total_volume", indexes, np.int64, default=0)
     tradable = np.ones(len(indexes), dtype=np.uint8)
@@ -212,20 +223,40 @@ def compact_batch(
             )
         status = numeric(batch, "status", indexes, np.uint32, default=0)
         tradable[twse_trial_status_mask(status)] = 0
+    if config.depth_levels == 1:
+        bid_px, bid_qty = best_side(bid_prices, bid_quantities, True, source)
+        ask_px, ask_qty = best_side(ask_prices, ask_quantities, False, source)
+        return pa.Table.from_arrays(
+            [
+                seq,
+                exchange,
+                local,
+                bid_px,
+                ask_px,
+                bid_qty,
+                ask_qty,
+                last_px,
+                total_volume,
+                tradable,
+            ],
+            schema=BBO_SCHEMA,
+        )
+
+    bid_px, bid_qty = depth_side(
+        bid_prices, bid_quantities, True, source, config.depth_levels
+    )
+    ask_px, ask_qty = depth_side(
+        ask_prices, ask_quantities, False, source, config.depth_levels
+    )
+    depth_arrays = [
+        *_nullable_depth_arrays(bid_px, bid_qty, price=True),
+        *_nullable_depth_arrays(bid_px, bid_qty, price=False),
+        *_nullable_depth_arrays(ask_px, ask_qty, price=True),
+        *_nullable_depth_arrays(ask_px, ask_qty, price=False),
+    ]
     return pa.Table.from_arrays(
-        [
-            seq,
-            exchange,
-            local,
-            bid_px,
-            ask_px,
-            bid_qty,
-            ask_qty,
-            last_px,
-            total_volume,
-            tradable,
-        ],
-        schema=BBO_SCHEMA,
+        [seq, exchange, local, *depth_arrays, last_px, total_volume, tradable],
+        schema=schema_for_depth_levels(config.depth_levels),
     )
 
 
@@ -245,21 +276,76 @@ def best_side(
     )
 
 
+def depth_side(
+    prices: np.ndarray,
+    quantities: np.ndarray,
+    bid: bool,
+    source: CompactSource,
+    depth_levels: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    return normalized_depth_from_depth_columns(
+        np.ascontiguousarray(prices),
+        np.ascontiguousarray(quantities),
+        source.volume_scale,
+        0.0 if source.price_only_depth_qty is None else source.price_only_depth_qty,
+        source.price_only_depth_qty is not None,
+        bid,
+        depth_levels,
+    )
+
+
+def _nullable_depth_arrays(
+    prices: np.ndarray,
+    quantities: np.ndarray,
+    *,
+    price: bool,
+) -> list[pa.Array]:
+    """Return five Arrow arrays with one shared null mask per price/qty level."""
+
+    values = prices if price else quantities
+    row_count, selected_levels = values.shape
+    arrays: list[pa.Array] = []
+    for level in range(5):
+        if level >= selected_levels:
+            arrays.append(pa.nulls(row_count, type=pa.float64()))
+            continue
+        missing = ~(
+            np.isfinite(prices[:, level])
+            & (prices[:, level] > 0.0)
+            & np.isfinite(quantities[:, level])
+            & (quantities[:, level] > 0.0)
+        )
+        arrays.append(pa.array(values[:, level], mask=missing, type=pa.float64()))
+    return arrays
+
+
 def consolidate_symbol(
     output: Path,
     parts: Sequence[Path],
+    *,
+    depth_levels: int = 1,
     **metadata: Any,
 ) -> dict[str, Any]:
     exchange_parts: list[np.ndarray] = []
     local_parts: list[np.ndarray] = []
     sequence_parts: list[np.ndarray] = []
+    price_parts: list[np.ndarray] = []
     row_count = 0
+    expected_schema = schema_for_depth_levels(depth_levels)
     for part in parts:
         with pa.memory_map(str(part), "r") as handle:
             table = ipc.open_file(handle).read_all().combine_chunks()
+        if table.schema.remove_metadata() != expected_schema:
+            raise CompactCacheError(
+                f"mixed or incompatible compact part schema: {part}"
+            )
         exchange_parts.append(table["exch_ts"].to_numpy(zero_copy_only=False))
         local_parts.append(table["local_ts_raw"].to_numpy(zero_copy_only=False))
         sequence_parts.append(table["source_seq"].to_numpy(zero_copy_only=False))
+        price_parts.extend(
+            table[name].to_numpy(zero_copy_only=False)
+            for name in _price_column_names(table.schema)
+        )
         row_count += table.num_rows
     exchange = np.concatenate(exchange_parts)
     local = np.concatenate(local_parts)
@@ -270,19 +356,13 @@ def consolidate_symbol(
         source_seq,
         base_latency_ns=int(metadata["base_latency_ns"]),
     )
-    file_metadata = {
-        **{key: str(value) for key, value in metadata.items()},
-        "schema_version": COMPACT_SCHEMA_VERSION,
-        "local_timestamp_adjustment_ns": str(
-            ordering["local_timestamp_adjustment_ns"]
-        ),
-        "exchange_ordering": "exch_ts,source_seq",
-        "local_ordering": "corrected_local_ts,source_seq",
-    }
-    output.parent.mkdir(parents=True, exist_ok=True)
-    schema = BBO_SCHEMA.with_metadata(
-        {key.encode(): value.encode() for key, value in file_metadata.items()}
+    file_metadata = _file_metadata(
+        depth_levels,
+        metadata,
+        local_timestamp_adjustment_ns=ordering["local_timestamp_adjustment_ns"],
     )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    schema = expected_schema.with_metadata(file_metadata)
     options = ipc.IpcWriteOptions(
         compression=None if metadata["compression"] == "none" else metadata["compression"]
     )
@@ -310,17 +390,7 @@ def consolidate_symbol(
             write_arrow=write_arrow,
             file_sha256=file_sha256,
         )
-    prices: list[np.ndarray] = []
-    for part in parts:
-        with pa.memory_map(str(part), "r") as handle:
-            table = ipc.open_file(handle).read_all()
-        prices.extend(
-            [
-                table["bid_px"].to_numpy(zero_copy_only=False),
-                table["ask_px"].to_numpy(zero_copy_only=False),
-            ]
-        )
-    valid_prices = np.concatenate(prices)
+    valid_prices = np.concatenate(price_parts)
     valid_prices = valid_prices[np.isfinite(valid_prices) & (valid_prices > 0)]
     return {
         "file": output.name,
@@ -344,17 +414,18 @@ def consolidate_symbol(
     }
 
 
-def write_empty_symbol(output: Path, **metadata: Any) -> dict[str, Any]:
-    file_metadata = {
-        **{key: str(value) for key, value in metadata.items()},
-        "schema_version": COMPACT_SCHEMA_VERSION,
-        "local_timestamp_adjustment_ns": "0",
-        "exchange_ordering": "exch_ts,source_seq",
-        "local_ordering": "corrected_local_ts,source_seq",
-    }
-    table = pa.Table.from_batches([], schema=BBO_SCHEMA).replace_schema_metadata(
-        {key.encode(): value.encode() for key, value in file_metadata.items()}
+def write_empty_symbol(
+    output: Path,
+    *,
+    depth_levels: int = 1,
+    **metadata: Any,
+) -> dict[str, Any]:
+    file_metadata = _file_metadata(
+        depth_levels, metadata, local_timestamp_adjustment_ns=0
     )
+    table = pa.Table.from_batches(
+        [], schema=schema_for_depth_levels(depth_levels)
+    ).replace_schema_metadata(file_metadata)
     write_arrow(output, table, metadata["compression"])
     return {
         "file": output.name,
@@ -375,6 +446,38 @@ def write_empty_symbol(output: Path, **metadata: Any) -> dict[str, Any]:
         "empty": True,
         "status": "valid",
     }
+
+
+def _file_metadata(
+    depth_levels: int,
+    metadata: dict[str, Any],
+    *,
+    local_timestamp_adjustment_ns: int,
+) -> dict[bytes, bytes]:
+    values = {
+        **{key: str(value) for key, value in metadata.items()},
+        "schema_version": schema_version_for_depth_levels(depth_levels),
+        "local_timestamp_adjustment_ns": str(local_timestamp_adjustment_ns),
+        "exchange_ordering": "exch_ts,source_seq",
+        "local_ordering": "corrected_local_ts,source_seq",
+    }
+    encoded = {key.encode(): value.encode() for key, value in values.items()}
+    if depth_levels > 1:
+        encoded.update(
+            top5_schema_metadata(
+                depth_levels,
+                local_timestamp_adjustment_ns=local_timestamp_adjustment_ns,
+            )
+        )
+    return encoded
+
+
+def _price_column_names(schema: pa.Schema) -> tuple[str, ...]:
+    if "bid_px" in schema.names:
+        return ("bid_px", "ask_px")
+    return tuple(
+        f"{side}_px_{level}" for side in ("bid", "ask") for level in range(1, 6)
+    )
 
 
 def iter_source_batches(path: Path, batch_rows: int) -> Iterator[pa.RecordBatch]:

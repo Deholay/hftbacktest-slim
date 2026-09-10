@@ -35,7 +35,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         choices=(1, 2, 3, 4, 5),
         default=1,
-        help="Symmetric bid/ask compact depth (Top-N population requires Phase 2).",
+        help="Symmetric bid/ask compact depth written to bbo_v2 or top5_v1.",
     )
     parser.add_argument("--batch-rows", type=int, default=131_072)
     parser.add_argument("--max-gb", type=float, default=200.0)

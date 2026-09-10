@@ -2,11 +2,11 @@
 
 ## Status and scope
 
-This document defines Phase 0 and Phase 1 of configurable symmetric compact
-market depth. These phases freeze the current BBO behavior and introduce the
+This document defines the staged implementation of configurable symmetric
+compact market depth. Phase 0 and Phase 1 froze BBO behavior and introduced
 configuration, physical schema, metadata, identity, namespace, CLI, and
-resource-estimation contracts needed by later work. They do not populate
-Top-N rows or change replay or matching behavior.
+resource-estimation contracts. Phase 2 now populates normalized Top-N Arrow
+rows without changing replay or matching behavior.
 
 The one user-facing selector is `depth_levels`, exposed on the command line as
 `--compact-depth-levels`. It accepts only Python integers from 1 through 5;
@@ -36,8 +36,8 @@ order. For each side and source row:
 3. Sort bids by descending price and asks by ascending price.
 4. Select the first N distinct levels.
 
-Phase 2 must reuse the existing provider-neutral normalization semantics and
-must preserve decimal prices.
+Phase 2 reuses one provider-neutral normalization implementation for BBO and
+Top-N and preserves decimal prices.
 
 ## Versioned physical profiles
 
@@ -83,9 +83,10 @@ tradable        uint8
 ```
 
 Every field is nullable, and in particular every depth price and quantity is
-nullable `float64`. Phase 2 will populate levels 1 through N and write nulls in
-all fields above N. A fixed physical schema makes files predictable while the
-selected N remains part of metadata and cache identity.
+nullable `float64`. Phase 2 populates levels 1 through N and writes Arrow nulls
+for unavailable levels and all fields above N. A fixed physical schema makes
+files predictable while the selected N remains part of metadata and cache
+identity.
 
 ## Metadata, identity, and namespace
 
@@ -127,7 +128,7 @@ state. Unknown identity metadata is never a cache hit.
 
 ## One-scan and resource contracts
 
-Later Top-N population must retain the existing successful-cold-date
+Top-N population retains the existing successful-cold-date
 invariant: at most one raw stock scan and one raw futures scan, projected
 streaming batches only, no whole-day collection, no raw scan inside symbol or
 pair loops, and no worker access to raw daily sources.
@@ -144,13 +145,13 @@ factor. Overall cache-budget and filesystem-free-space checks remain in force.
 The slim engine remains an immediate, crossing, no-partial-fill BBO matcher.
 `top5_v1` is a data profile, not authorization to reinterpret `DepthView`, the
 native `BboRow`/`BboView`, the C ABI, queue behavior, displayed-size behavior,
-or futures/spot strategy decisions. In Phase 1, every actual build request
-with `depth_levels>1` fails before a raw source batch is scanned, so BBO rows
-can never be published under a Top-5 identity.
+or futures/spot strategy decisions. Phase 2 removes the package cache-build
+guard and supports streaming `top5_v1` publication and profile-aware
+`read_symbol()` tables. Full-market execution fails before cache construction
+for `depth_levels>1` because its engine readers remain BBO-only.
 
-Phase 2 and later must separately specify and implement Top-N normalization
-output, streaming Arrow population (including nulls above N), multi-level
-reference-HBT reconstruction where appropriate, readers, and any future
+Later phases must separately implement richer manifest depth analytics,
+multi-level reference-HBT reconstruction, runtime readers, and any future
 depth-sensitive execution mode. Native engine or matching changes require a
 separate semantic version, ABI review where layouts change, regression
 baseline, and parity gate.

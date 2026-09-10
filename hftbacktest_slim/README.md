@@ -82,8 +82,9 @@ from hftbacktest_slim import (
 )
 ```
 
-The lazy root API also exposes `aggregate_depth_side` and
-`normalized_bbo_from_depth_columns` for converters. The documented
+The lazy root API also exposes `aggregate_depth_side`,
+`normalized_bbo_from_depth_columns`, and
+`normalized_depth_from_depth_columns` for converters. The documented
 `hftbacktest_slim.market_data` subpackage exposes `compact_partition_audit` and
 schema/dtype constants for reference adapters. Binding, FFI, hashing,
 manifest-publication, and temporary file helpers remain internal.
@@ -116,9 +117,10 @@ Builder version `4` adds `depth_levels` and the canonical depth profile to
 cache identity. `depth_levels=1` remains the default and keeps the `bbo_v2`
 physical schema and `cache_root/date=YYYYMMDD` path. Levels 2 through 5 select
 the fixed `top5_v1` schema and isolated
-`profile=top5_v1/depth_levels=N/date=YYYYMMDD` namespace, but Phase 1 rejects
-actual Top-N builds before raw scanning because Arrow population is deferred.
-The native engine remains BBO-only. Builder version `3` previously invalidated
+`profile=top5_v1/depth_levels=N/date=YYYYMMDD` namespace. The streaming builder
+normalizes distinct levels, aggregates repeated prices, sorts each side, and
+uses explicit Arrow nulls for unavailable and disabled levels. The native
+engine and full-market execution path remain BBO-only. Builder version `3` previously invalidated
 earlier cache identities because the new
 `tradable` state changes both the physical contract and matching behavior. A cold date
 streams projected Arrow record batches and scans each physical stock/futures

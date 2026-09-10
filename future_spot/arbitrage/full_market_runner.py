@@ -51,6 +51,7 @@ from hftbacktest_slim import (  # noqa: E402
     CompactCacheError,
     CompactCacheStore,
     CompactSource,
+    UnsupportedCapabilityError,
     profile_for_depth_levels,
     schema_version_for_depth_levels,
 )
@@ -324,7 +325,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         choices=(1, 2, 3, 4, 5),
         default=1,
-        help="Symmetric bid/ask compact depth (Top-N population requires Phase 2).",
+        help="Symmetric compact depth; execution currently supports BBO (1) only.",
     )
     parser.add_argument("--compact-cache-max-gb", type=float, default=200.0)
     parser.add_argument("--compact-cache-min-free-gb", type=float, default=200.0)
@@ -1493,6 +1494,12 @@ def build_event_data(
     records: list[DailyPairRecord],
 ) -> tuple[dict[str, dict[str, Path]], pd.DataFrame]:
     if getattr(args, "market_data_cache", "event_npz") == "compact":
+        depth_levels = getattr(args, "compact_depth_levels", 1)
+        if depth_levels > 1:
+            raise UnsupportedCapabilityError(
+                "full-market execution cannot consume top5_v1 before Phase 4; "
+                "build Top-N caches with hftbacktest-slim-build-cache"
+            )
         return build_compact_event_data(args, records)
     args.spot_input_csv_by_symbol = prepare_spot_input_csvs(args, records)
     future_results = prepare_future_events(args, records)

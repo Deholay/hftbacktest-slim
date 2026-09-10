@@ -28,7 +28,6 @@ from hftbacktest_slim import (
     validate_compact_schema,
     validate_top5_schema,
 )
-from hftbacktest_slim.cache import builder
 from hftbacktest_slim.cache.manifest import build_identity, canonical_sha256
 from hftbacktest_slim.cache.publication import preflight_space, projected_bytes
 from hftbacktest_slim.errors import ArrowDataError
@@ -267,21 +266,6 @@ def test_default_and_topn_date_paths_use_noncolliding_namespaces(
             / "date=20260302"
         )
     assert len(set(paths.values())) == 4
-
-
-@pytest.mark.parametrize("depth", [2, 3, 4, 5])
-def test_topn_build_fails_before_source_batch_scanning(
-    tmp_path: Path, depth: int
-) -> None:
-    store = CompactCacheStore(
-        CompactBuildConfig(cache_root=tmp_path / "cache", depth_levels=depth)
-    )
-    source = CompactSource("stock", (tmp_path / "not-read.parquet",), ("0050",))
-    with patch.object(builder, "iter_source_batches") as scan:
-        with pytest.raises(CompactCacheError, match="population is not implemented"):
-            store.build_date("2026-03-02", [source])
-    scan.assert_not_called()
-    assert not store.namespace_root.exists()
 
 
 def test_resource_estimates_are_profile_aware_and_keep_bbo_baseline() -> None:

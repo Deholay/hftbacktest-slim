@@ -17,12 +17,13 @@ from future_spot.arbitrage.full_market_runner import (
     _hbt_implementation_paths,
     balanced_backtest_shards,
     build_compact_event_data,
+    build_event_data,
     compact_asset_audit,
     ensure_spot_events,
     run_backtests,
 )
 from future_spot.arbitrage.models import PairConfig
-from hftbacktest_slim import BBO_SCHEMA
+from hftbacktest_slim import BBO_SCHEMA, UnsupportedCapabilityError
 
 
 def _pair(name: str) -> PairConfig:
@@ -56,6 +57,20 @@ class InlineExecutor:
 
 
 class PersistentExecutorTest(unittest.TestCase):
+    def test_full_market_topn_execution_fails_before_cache_build(self) -> None:
+        args = SimpleNamespace(
+            market_data_cache="compact",
+            compact_depth_levels=3,
+        )
+        with patch(
+            "future_spot.arbitrage.full_market_runner.build_compact_event_data"
+        ) as build:
+            with self.assertRaisesRegex(
+                UnsupportedCapabilityError, "cannot consume top5_v1 before Phase 4"
+            ):
+                build_event_data(args, [])
+        build.assert_not_called()
+
     def test_legacy_spot_npz_is_not_reused_without_trial_match_metadata(self) -> None:
         import tempfile
 

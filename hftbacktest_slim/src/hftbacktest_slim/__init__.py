@@ -73,6 +73,10 @@ _COMPACT_EXPORTS = {
         ".market_data.normalize",
         "normalized_bbo_from_depth_columns",
     ),
+    "normalized_depth_from_depth_columns": (
+        ".market_data.normalize",
+        "normalized_depth_from_depth_columns",
+    ),
 }
 
 
@@ -129,6 +133,7 @@ __all__ = (
     "aggregate_depth_side",
     "compact_row_estimate_bytes",
     "normalized_bbo_from_depth_columns",
+    "normalized_depth_from_depth_columns",
     "profile_for_depth_levels",
     "schema_for_depth_levels",
     "schema_version_for_depth_levels",

@@ -65,11 +65,6 @@ class CompactCacheStore:
         sources: Sequence[CompactSource],
     ) -> dict[str, Any]:
         validate_date_value(trade_date)
-        if self.config.depth_levels > 1:
-            raise CompactCacheError(
-                "compact Top-N Arrow population is not implemented yet; "
-                "depth_levels>1 cannot be built"
-            )
         _validate_source_request(sources)
         expected = self._identity(trade_date, sources)
         final = self.date_path(trade_date)
@@ -355,6 +350,8 @@ class CompactCacheStore:
             )
         )
         prices = prices[np.isfinite(prices) & (prices > 0)]
+        if self.config.depth_levels > 1:
+            self._validate_top5_rows(table, file_path)
         observed_bounds = {
             "first_exch_ts": int(exchange.min()) if len(exchange) else None,
             "last_exch_ts": int(exchange.max()) if len(exchange) else None,
@@ -414,6 +411,61 @@ class CompactCacheStore:
                 expected_order=expected_order,
                 expected_details=sidecar,
             )
+
+    def _validate_top5_rows(self, table: pa.Table, file_path: Path) -> None:
+        """Fail closed on paired-null, enabled-depth, and ordering violations."""
+
+        row_count = table.num_rows
+        for side in ("bid", "ask"):
+            previous_values: np.ndarray | None = None
+            previous_present: np.ndarray | None = None
+            for level in range(1, 6):
+                price = table[f"{side}_px_{level}"].combine_chunks()
+                quantity = table[f"{side}_qty_{level}"].combine_chunks()
+                price_null = price.is_null().to_numpy(zero_copy_only=False)
+                quantity_null = quantity.is_null().to_numpy(zero_copy_only=False)
+                if not np.array_equal(price_null, quantity_null):
+                    raise CompactCacheError(
+                        f"compact Top-N price/quantity null mismatch: {file_path}"
+                    )
+                if level > self.config.depth_levels:
+                    if int(np.count_nonzero(price_null)) != row_count:
+                        raise CompactCacheError(
+                            f"compact Top-N disabled level is not null: {file_path}"
+                        )
+                    continue
+                present = ~price_null
+                price_values = price.to_numpy(zero_copy_only=False)
+                quantity_values = quantity.to_numpy(zero_copy_only=False)
+                if np.any(
+                    present
+                    & ~(
+                        np.isfinite(price_values)
+                        & (price_values > 0.0)
+                        & np.isfinite(quantity_values)
+                        & (quantity_values > 0.0)
+                    )
+                ):
+                    raise CompactCacheError(
+                        f"compact Top-N level contains invalid values: {file_path}"
+                    )
+                if previous_present is not None:
+                    if np.any(present & ~previous_present):
+                        raise CompactCacheError(
+                            f"compact Top-N levels contain an internal gap: {file_path}"
+                        )
+                    both = present & previous_present
+                    out_of_order = (
+                        price_values <= previous_values
+                        if side == "ask"
+                        else price_values >= previous_values
+                    )
+                    if np.any(both & out_of_order):
+                        raise CompactCacheError(
+                            f"compact Top-N levels are not distinct and ordered: {file_path}"
+                        )
+                previous_values = price_values
+                previous_present = present
 
 
 def validate_date_value(value: str) -> None:
