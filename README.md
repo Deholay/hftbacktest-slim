@@ -125,7 +125,7 @@ python3 future_spot/test/run_full_backtest.py \
 | `hftbacktest_slim/native/src/` | Rust scheduler、BBO state、latency/order state，以及立即 FOK/IOC matching core；依 types、book、scheduler、matcher、engine 與 FFI 職責分割。 |
 | `hftbacktest_slim/src/hftbacktest_slim/engine/` | Neutral `SlimEngine`、`ctypes` ABI binding、Arrow partition reader、lifecycle 與 capability validation。 |
 | `hftbacktest_slim/src/hftbacktest_slim/market_data/` | Canonical `bbo_v2` schema/aligned dtype、TWSE 緩撮交易狀態、Top-5 normalization、timestamp ordering/sidecars 與 generic compact audit。 |
-| `hftbacktest_slim/src/hftbacktest_slim/cache/` | Builder v3 one-scan cache、manifest identity/validation、disk budgets 與 atomic publication。 |
+| `hftbacktest_slim/src/hftbacktest_slim/cache/` | Builder v4 one-scan cache、depth/profile manifest identity、disk budgets 與 atomic publication。 |
 | `future_spot/arbitrage/execution_port.py`、`reference_execution.py`、`slim_execution.py` | Strategy-owned execution port，以及 reference／neutral slim adapters。 |
 | `future_spot/arbitrage/hbt_backtest.py` | 經由 execution port 執行共用 pair strategy 流程。 |
 | `future_spot/arbitrage/full_market_runner.py` | CLI、compact data 編排、依日期循序留倉、workers、結果持久化與 manifests。 |
@@ -136,8 +136,9 @@ Python neutral API 可由 `hftbacktest_slim` 匯入 `AssetConfig`、`SlimEngine`
 `Side`、`TimeInForce`、`BBO_SCHEMA`、`CompactBuildConfig`、
 `CompactCacheStore` 與 `CompactSource`。Native library 依序採用明確的 `library_path`、
 `HFTBACKTEST_SLIM_LIBRARY`、package artifact，以及 root Cargo release artifact；
-package import 本身不會載入 shared library。Compact schema 為 `bbo_v2`，builder
-為 version `3`；新增 `tradable` 欄位，TWSE `trial_status_tag=1` 時清空 BBO 並停止
+package import 本身不會載入 shared library。預設 compact schema 為 `bbo_v2`，builder
+為 version `4`；`depth_levels=2..5` 的 `top5_v1` schema/namespace 已定義，但 Phase 1
+會在 raw scan 前拒絕實際 build。`tradable` 欄位在 TWSE `trial_status_tag=1` 時清空 BBO 並停止
 matching，直到下一筆可交易行情。舊 compact cache 會保守失效。`future_spot` slim path 直接使用 neutral API；
 `examples/slim_two_asset_strategy/` 以另一個獨立策略驗證相同擴充邊界。這次 integration
 source 變更與 Phase 6 source selection 會使舊 result manifests 失效，但移除舊入口
@@ -152,7 +153,8 @@ python3 -m hftbacktest_slim.cli.benchmark_read --help
 
 Cold build 對每個日期的股票及期貨 physical source 各讀一次 projected record
 batches；warm validated reuse 不讀 raw payload。預設 LZ4，亦保留 `none` 與 `zstd`。
-建置前依 `source_rows * 96 * 1.20` 檢查容量及 free-space reserve，每個 batch 後重查；
+建置前依 profile-aware row estimate（`bbo_v2=96`、`top5_v1=256` bytes）乘上
+`source_rows * 1.20` 檢查容量及 free-space reserve，每個 batch 後重查；
 manifest 最後寫入並以同檔案系統 atomic rename 發布，失敗時只清理當次 incomplete
 temporary date，不會自動刪除 completed cache、raw data 或 results。
 

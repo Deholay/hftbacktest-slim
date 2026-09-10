@@ -6,9 +6,21 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..market_data.schema import (
+    BBO_PROFILE,
+    profile_for_depth_levels,
+    schema_version_for_depth_levels,
+    validate_depth_levels,
+)
 
-COMPACT_BUILDER_VERSION = 3
+
+COMPACT_BUILDER_VERSION = 4
 COMPACT_ROW_ESTIMATE_BYTES = 96
+# top5_v1 has 25 eight-byte values, one uint8, and 26 nullable validity bits.
+# Round the uncompressed payload up to a 64-byte boundary for Arrow/alignment
+# overhead; the existing 1.20 preflight safety factor is applied separately.
+_TOP5_PAYLOAD_BYTES = (25 * 8) + 1 + math.ceil(26 / 8)
+TOP5_ROW_ESTIMATE_BYTES = math.ceil(_TOP5_PAYLOAD_BYTES / 64) * 64
 DEFAULT_MAX_CACHE_BYTES = 200 * 1024**3
 DEFAULT_MIN_FREE_BYTES = 200 * 1024**3
 DEFAULT_BATCH_ROWS = 131_072
@@ -62,11 +74,19 @@ class CompactBuildConfig:
     max_cache_bytes: int = DEFAULT_MAX_CACHE_BYTES
     min_free_bytes: int = DEFAULT_MIN_FREE_BYTES
     rebuild: bool = False
+    depth_levels: int = 1
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "cache_root", Path(self.cache_root))
-        if self.profile != "bbo":
-            raise ValueError("only compact profile 'bbo' is supported")
+        depth = validate_depth_levels(self.depth_levels)
+        canonical_profile = profile_for_depth_levels(depth)
+        if self.profile not in {BBO_PROFILE, canonical_profile}:
+            raise ValueError(
+                "profile is compatibility-only; depth_levels selects bbo or top5"
+            )
+        # Existing callers may keep passing profile="bbo". For depth > 1 it
+        # is treated as the legacy default, not as an independent selector.
+        object.__setattr__(self, "profile", canonical_profile)
         if self.compression not in {"lz4", "zstd", "none"}:
             raise ValueError("compression must be lz4, zstd, or none")
         if self.batch_rows <= 0:
@@ -82,13 +102,46 @@ class CompactBuildConfig:
         ):
             raise ValueError("session_start_ns must not exceed session_end_ns")
 
+    @property
+    def schema_version(self) -> str:
+        return schema_version_for_depth_levels(self.depth_levels)
+
+
+def compact_row_estimate_bytes(depth_levels: object) -> int:
+    """Return a conservative uncompressed row estimate before safety factor."""
+
+    return (
+        COMPACT_ROW_ESTIMATE_BYTES
+        if validate_depth_levels(depth_levels) == 1
+        else TOP5_ROW_ESTIMATE_BYTES
+    )
+
+
+def cache_namespace_components(depth_levels: object) -> tuple[str, ...]:
+    """Return safe, deterministic path components for the selected profile."""
+
+    depth = validate_depth_levels(depth_levels)
+    if depth == 1:
+        return ()
+    components = ("profile=top5_v1", f"depth_levels={depth}")
+    if any(
+        Path(component).name != component
+        or any(separator in component for separator in ("/", "\\"))
+        for component in components
+    ):
+        raise ValueError("invalid compact cache namespace component")
+    return components
+
 
 __all__ = (
     "COMPACT_BUILDER_VERSION",
     "COMPACT_ROW_ESTIMATE_BYTES",
+    "TOP5_ROW_ESTIMATE_BYTES",
     "DEFAULT_BATCH_ROWS",
     "DEFAULT_MAX_CACHE_BYTES",
     "DEFAULT_MIN_FREE_BYTES",
     "CompactBuildConfig",
     "CompactSource",
+    "cache_namespace_components",
+    "compact_row_estimate_bytes",
 )

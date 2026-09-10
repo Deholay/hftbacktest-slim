@@ -30,6 +30,14 @@ book marker for the same interval and suppresses inferred trades. This is a
 versioned semantic change with a distinct result baseline; legacy compact
 caches and stock event NPZ files are not reusable.
 
+Configurable-depth Phase 0/1 extension (2026-09-10): package `0.6.0` and
+compact builder version `4` retain compact schema `bbo_v2`, Rust
+crate/engine `0.4.0`, and native ABI `3` for the default `depth_levels=1`
+path. The extension defines the separate fixed `top5_v1` Arrow profile,
+depth/profile identity and namespaces, metadata validation, CLI scaffolding,
+and profile-aware preflight estimates. Top-N population and depth-sensitive
+matching are not implemented; builds above one level fail before raw scans.
+
 For package location, code ownership, public API, and dependency direction,
 this document supersedes older extraction locations in
 `HBT_ACCELERATION_STRATEGY.md`. That strategy document and `AGENTS.md` remain

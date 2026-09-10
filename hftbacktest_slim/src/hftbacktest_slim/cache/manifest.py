@@ -12,7 +12,7 @@ import pyarrow as pa
 import pyarrow.ipc as ipc
 import pyarrow.parquet as pq
 
-from ..market_data.schema import COMPACT_SCHEMA_VERSION, PROJECTED_COLUMNS
+from ..market_data.schema import PROJECTED_COLUMNS
 from .config import COMPACT_BUILDER_VERSION, CompactBuildConfig, CompactSource
 
 
@@ -114,7 +114,7 @@ def build_identity(
     normalize_path = package_root / "market_data" / "normalize.py"
     return {
         "trade_date": trade_date,
-        "schema_version": COMPACT_SCHEMA_VERSION,
+        "schema_version": config.schema_version,
         "builder_version": COMPACT_BUILDER_VERSION,
         # Legacy field names remain for manifest readers, but their values now
         # describe the canonical package implementation rather than wrappers.
@@ -126,6 +126,7 @@ def build_identity(
         ],
         "compression": config.compression,
         "profile": config.profile,
+        "depth_levels": config.depth_levels,
         "timezone": config.timezone,
         "session_start_ns": config.session_start_ns,
         "session_end_ns": config.session_end_ns,

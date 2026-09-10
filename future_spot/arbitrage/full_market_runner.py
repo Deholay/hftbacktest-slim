@@ -47,11 +47,12 @@ from scripts.tw_stock_data_to_npz import (  # noqa: E402
 )
 from hftbacktest_slim import (  # noqa: E402
     COMPACT_BUILDER_VERSION,
-    COMPACT_SCHEMA_VERSION,
     CompactBuildConfig,
     CompactCacheError,
     CompactCacheStore,
     CompactSource,
+    profile_for_depth_levels,
+    schema_version_for_depth_levels,
 )
 from hftbacktest_slim.market_data import compact_partition_audit  # noqa: E402
 from scripts.compact_hbt_adapter import (  # noqa: E402
@@ -318,6 +319,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--compact-cache-compression", choices=("none", "lz4", "zstd"), default="lz4")
     parser.add_argument("--compact-cache-profile", choices=("bbo",), default="bbo")
+    parser.add_argument(
+        "--compact-depth-levels",
+        type=int,
+        choices=(1, 2, 3, 4, 5),
+        default=1,
+        help="Symmetric bid/ask compact depth (Top-N population requires Phase 2).",
+    )
     parser.add_argument("--compact-cache-max-gb", type=float, default=200.0)
     parser.add_argument("--compact-cache-min-free-gb", type=float, default=200.0)
     parser.add_argument("--compact-cache-batch-rows", type=int, default=131_072)
@@ -470,6 +478,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--continue-on-error", action="store_true")
     parser.add_argument("--log-level", default="INFO", choices=("DEBUG", "INFO", "WARNING", "ERROR"))
     args = parser.parse_args(argv)
+    args.compact_cache_profile = profile_for_depth_levels(args.compact_depth_levels)
     if args.engine == "slim":
         args.market_data_cache = "compact"
     if args.strategy_clock == "event" and args.engine != "slim":
@@ -1141,7 +1150,9 @@ def run_backtests_with_position_carry(
                     "engine": getattr(args, "engine", "reference"),
                     "engine_version": execution_engine_version(args),
                     "compact_schema_version": (
-                        COMPACT_SCHEMA_VERSION
+                        schema_version_for_depth_levels(
+                            getattr(args, "compact_depth_levels", 1)
+                        )
                         if getattr(args, "market_data_cache", "event_npz") == "compact"
                         else None
                     ),
@@ -1564,6 +1575,7 @@ def build_compact_event_data(
             cache_root=Path(args.compact_cache_root),
             compression=args.compact_cache_compression,
             profile=args.compact_cache_profile,
+            depth_levels=getattr(args, "compact_depth_levels", 1),
             session_start_ns=session_start_ns,
             session_end_ns=session_end_ns,
             batch_rows=args.compact_cache_batch_rows,
@@ -1638,7 +1650,8 @@ def build_compact_event_data(
                         saved = json.loads(adapter_manifest.read_text(encoding="utf-8"))
                         reusable = (
                             saved.get("adapter_version") == COMPACT_HBT_ADAPTER_VERSION
-                            and saved.get("compact_schema_version") == COMPACT_SCHEMA_VERSION
+                            and saved.get("compact_schema_version")
+                            == manifest["schema_version"]
                             and saved.get("compact_identity_sha256")
                             == manifest["identity_sha256"]
                         )
@@ -2050,7 +2063,9 @@ def summarize_asset(args: argparse.Namespace, record: DailyPairRecord, leg: str,
         "trade_events": summary["trade_events"],
         "non_tradable_rows": summary.get("non_tradable_rows", 0),
         "engine": getattr(args, "engine", "reference"),
-        "compact_schema_version": COMPACT_SCHEMA_VERSION
+        "compact_schema_version": schema_version_for_depth_levels(
+            getattr(args, "compact_depth_levels", 1)
+        )
         if getattr(args, "market_data_cache", "event_npz") == "compact"
         else None,
     }
@@ -2448,6 +2463,7 @@ HBT_RESULT_ARG_NAMES = (
     "market_data_cache",
     "compact_cache_compression",
     "compact_cache_profile",
+    "compact_depth_levels",
     "first_leg",
     "strategy_clock",
     "step_ms",
@@ -2609,7 +2625,9 @@ def hbt_manifest_payload(args: argparse.Namespace, records: list[DailyPairRecord
         "execution_port": "future-spot-execution-port-v2",
         "execution_adapter": f"{getattr(args, 'engine', 'reference')}-v2",
         "compact_schema_version": (
-            COMPACT_SCHEMA_VERSION
+            schema_version_for_depth_levels(
+                getattr(args, "compact_depth_levels", 1)
+            )
             if getattr(args, "market_data_cache", "event_npz") == "compact"
             else None
         ),

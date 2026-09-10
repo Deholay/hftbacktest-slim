@@ -78,6 +78,7 @@ class FastPipelineTest(unittest.TestCase):
         self.assertEqual(args.record_market_every_steps, 60)
         self.assertEqual(args.strategy_clock, "step")
         self.assertEqual(args.strategy_engine, "numba")
+        self.assertEqual(args.compact_depth_levels, 1)
         self.assertEqual(args.spot_input_csv_template, "")
         self.assertEqual(args.data_platform_base, "/mnt/z/數據平台")
         self.assertTrue(args.low_memory_reports)
@@ -87,6 +88,12 @@ class FastPipelineTest(unittest.TestCase):
         self.assertGreaterEqual(args.workers, 1)
         self.assertEqual(len(args.excluded_dates), 7)
         self.assertEqual(len(args.excluded_run_keys), 8)
+
+        depth_args = parse_args(["--compact-depth-levels", "3"])
+        self.assertEqual(depth_args.compact_depth_levels, 3)
+        self.assertEqual(depth_args.compact_cache_profile, "top5")
+        with self.assertRaises(SystemExit):
+            parse_args(["--compact-depth-levels", "6"])
 
     def test_event_clock_requires_slim_and_uses_distinct_output_dir(self) -> None:
         with self.assertRaises(SystemExit):

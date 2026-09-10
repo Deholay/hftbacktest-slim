@@ -273,6 +273,7 @@ class PersistentExecutorTest(unittest.TestCase):
             compact_cache_root=Path("/cache"),
             compact_cache_compression="lz4",
             compact_cache_profile="bbo",
+            compact_depth_levels=3,
             compact_cache_batch_rows=1024,
             compact_cache_max_gb=1.0,
             compact_cache_min_free_gb=0.0,
@@ -305,6 +306,7 @@ class PersistentExecutorTest(unittest.TestCase):
             ("stock_future", ("Fa", "Fb")),
         ])
         self.assertEqual(set(paths), {record.run_key for record in records})
+        self.assertIn("profile=top5_v1/depth_levels=3", str(paths[records[0].run_key]["spot"]))
         self.assertEqual(audit["compact_build_invocation_scan_count"].tolist(), [2, 2])
 
     def test_run_backtests_uses_caller_owned_executor(self) -> None:

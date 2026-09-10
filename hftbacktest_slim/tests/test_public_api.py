@@ -38,13 +38,19 @@ EXPECTED_PUBLIC_EXPORTS = {
     "ArrowDataError",
     "AssetConfig",
     "BBO_SCHEMA",
+    "BBO_SCHEMA_VERSION",
     "COMPACT_BUILDER_VERSION",
+    "COMPACT_ROW_ESTIMATE_BYTES",
     "COMPACT_SCHEMA_VERSION",
     "CompactBuildConfig",
     "CompactCacheBudgetError",
     "CompactCacheError",
     "CompactCacheStore",
     "CompactSource",
+    "TOP5_PHYSICAL_FIELDS",
+    "TOP5_ROW_ESTIMATE_BYTES",
+    "TOP5_SCHEMA",
+    "TOP5_SCHEMA_VERSION",
     "DepthView",
     "EngineClosedError",
     "FeedLatency",
@@ -65,7 +71,16 @@ EXPECTED_PUBLIC_EXPORTS = {
     "UnsupportedCapabilityError",
     "__version__",
     "aggregate_depth_side",
+    "compact_row_estimate_bytes",
     "normalized_bbo_from_depth_columns",
+    "profile_for_depth_levels",
+    "schema_for_depth_levels",
+    "schema_version_for_depth_levels",
+    "top5_schema_metadata",
+    "validate_compact_schema",
+    "validate_depth_levels",
+    "validate_top5_schema",
+    "validate_top5_schema_metadata",
 }
 
 
@@ -73,13 +88,13 @@ def test_public_exports_are_the_implemented_neutral_runtime() -> None:
     assert set(hftbacktest_slim.__all__) == EXPECTED_PUBLIC_EXPORTS
     assert hftbacktest_slim.SlimEngine is SlimEngine
     assert hftbacktest_slim.COMPACT_SCHEMA_VERSION == "bbo_v2"
-    assert hftbacktest_slim.COMPACT_BUILDER_VERSION == 3
+    assert hftbacktest_slim.COMPACT_BUILDER_VERSION == 4
 
 
 def test_package_version_matches_project_metadata() -> None:
     project_root = Path(__file__).resolve().parents[1]
     metadata = tomllib.loads((project_root / "pyproject.toml").read_text(encoding="utf-8"))
-    assert hftbacktest_slim.__version__ == "0.5.0"
+    assert hftbacktest_slim.__version__ == "0.6.0"
     assert metadata["project"]["version"] == hftbacktest_slim.__version__
 
 

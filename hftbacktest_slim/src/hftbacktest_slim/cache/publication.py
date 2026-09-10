@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..errors import CompactCacheBudgetError, CompactCacheError
-from .config import COMPACT_ROW_ESTIMATE_BYTES, CompactBuildConfig
+from .config import CompactBuildConfig, compact_row_estimate_bytes
 
 
 def directory_bytes(path: Path) -> int:
@@ -23,14 +23,16 @@ def directory_bytes(path: Path) -> int:
     )
 
 
-def projected_bytes(source_rows: int) -> int:
-    return math.ceil(source_rows * COMPACT_ROW_ESTIMATE_BYTES * 1.20)
+def projected_bytes(source_rows: int, depth_levels: int = 1) -> int:
+    return math.ceil(source_rows * compact_row_estimate_bytes(depth_levels) * 1.20)
 
 
 def preflight_space(
     root: Path,
     config: CompactBuildConfig,
     identity: dict[str, Any],
+    *,
+    namespace_root: Path | None = None,
 ) -> None:
     """Enforce metadata-derived worst-case space before any temp write."""
 
@@ -39,14 +41,17 @@ def preflight_space(
         for source in identity["sources"]
         for file_identity in source["files"]
     )
-    estimate = projected_bytes(source_rows)
+    estimate = projected_bytes(source_rows, config.depth_levels)
     existing = directory_bytes(root)
     if existing + estimate > config.max_cache_bytes:
         raise CompactCacheBudgetError(
             f"compact cache budget exceeded: existing={existing} projected={estimate} "
             f"limit={config.max_cache_bytes}"
         )
-    probe = root.parent if root.parent.exists() else Path.cwd()
+    selected = root if namespace_root is None else namespace_root
+    probe = selected if selected.exists() else selected.parent
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
     free = shutil.disk_usage(probe).free
     if free - estimate < config.min_free_bytes:
         raise CompactCacheBudgetError(

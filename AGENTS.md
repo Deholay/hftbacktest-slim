@@ -288,10 +288,12 @@ reference ordering is:
 ### Disk and memory safety
 
 Feather is a cache, not the only copy of research data. Before a build, estimate
-worst-case space from source rows. Until measured otherwise, use:
+worst-case space from source rows. Until measured otherwise, use the selected
+physical profile's conservative row estimate:
 
 ```text
-projected_bytes = source_rows * 96 * 1.20
+bbo_v2:  projected_bytes = source_rows * 96  * 1.20
+top5_v1: projected_bytes = source_rows * 256 * 1.20
 ```
 
 Enforce both a configurable cache-size cap and a minimum-free-space reserve;

@@ -14,14 +14,16 @@ import pyarrow.ipc as ipc
 from ..errors import ArrowDataError, CompactCacheError
 from ..market_data.ordering import timestamp_ordering_facts, validate_order_sidecar
 from ..market_data.schema import (
-    COMPACT_SCHEMA_VERSION,
     PROJECTED_COLUMNS,
-    decoded_metadata,
-    validate_bbo_schema,
-    validate_schema_metadata,
+    validate_compact_schema,
 )
 from .builder import build_source, source_dirname
-from .config import COMPACT_BUILDER_VERSION, CompactBuildConfig, CompactSource
+from .config import (
+    COMPACT_BUILDER_VERSION,
+    CompactBuildConfig,
+    CompactSource,
+    cache_namespace_components,
+)
 from .manifest import (
     build_identity,
     canonical_sha256,
@@ -46,9 +48,16 @@ class CompactCacheStore:
         self.config = config
         self.root = Path(config.cache_root)
 
+    @property
+    def namespace_root(self) -> Path:
+        path = self.root
+        for component in cache_namespace_components(self.config.depth_levels):
+            path /= component
+        return path
+
     def date_path(self, trade_date: str) -> Path:
         validate_date_value(trade_date)
-        return self.root / f"date={trade_date.replace('-', '')}"
+        return self.namespace_root / f"date={trade_date.replace('-', '')}"
 
     def build_date(
         self,
@@ -56,6 +65,11 @@ class CompactCacheStore:
         sources: Sequence[CompactSource],
     ) -> dict[str, Any]:
         validate_date_value(trade_date)
+        if self.config.depth_levels > 1:
+            raise CompactCacheError(
+                "compact Top-N Arrow population is not implemented yet; "
+                "depth_levels>1 cannot be built"
+            )
         _validate_source_request(sources)
         expected = self._identity(trade_date, sources)
         final = self.date_path(trade_date)
@@ -78,8 +92,13 @@ class CompactCacheStore:
                     f"or a new root: {final}"
                 )
 
-        preflight_space(self.root, self.config, expected)
-        temp = create_temporary_date(self.root, trade_date)
+        preflight_space(
+            self.root,
+            self.config,
+            expected,
+            namespace_root=self.namespace_root,
+        )
+        temp = create_temporary_date(self.namespace_root, trade_date)
         started = time.perf_counter()
         try:
             source_manifests: dict[str, Any] = {}
@@ -93,8 +112,10 @@ class CompactCacheStore:
                     self.config,
                 )
             payload = {
-                "schema_version": COMPACT_SCHEMA_VERSION,
+                "schema_version": self.config.schema_version,
                 "builder_version": COMPACT_BUILDER_VERSION,
+                "profile": self.config.profile,
+                "depth_levels": self.config.depth_levels,
                 "trade_date": trade_date,
                 "build_complete": True,
                 "identity": expected,
@@ -107,14 +128,14 @@ class CompactCacheStore:
             self._validate_sources(temp, trade_date, source_manifests)
             write_json(temp / "manifest.json", payload)
             publish_date_atomically(
-                root=self.root,
+                root=self.namespace_root,
                 temp=temp,
                 final=final,
                 validate_staged=lambda path: self._validate_path(path, trade_date),
             )
         except Exception:
             if temp.exists():
-                cleanup_incomplete_date(self.root, temp, trade_date)
+                cleanup_incomplete_date(self.namespace_root, temp, trade_date)
             raise
         validated = self.validate_date(trade_date)
         return {
@@ -155,7 +176,7 @@ class CompactCacheStore:
             payload = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise CompactCacheError(f"invalid or incomplete compact date: {path}") from exc
-        if payload.get("schema_version") != COMPACT_SCHEMA_VERSION:
+        if payload.get("schema_version") != self.config.schema_version:
             raise CompactCacheError(f"unsupported compact schema version: {path}")
         if payload.get("builder_version") != COMPACT_BUILDER_VERSION:
             raise CompactCacheError(f"unsupported compact builder version: {path}")
@@ -163,13 +184,21 @@ class CompactCacheStore:
             raise CompactCacheError(f"unsupported or incomplete compact date: {path}")
         if payload.get("trade_date") != trade_date:
             raise CompactCacheError(f"compact date identity mismatch: {path}")
+        if payload.get("profile") != self.config.profile:
+            raise CompactCacheError(f"compact date profile mismatch: {path}")
+        if payload.get("depth_levels") != self.config.depth_levels:
+            raise CompactCacheError(f"compact date depth-level mismatch: {path}")
         identity = payload.get("identity")
         if not isinstance(identity, dict):
             raise CompactCacheError(f"compact identity metadata is missing: {path}")
-        if identity.get("schema_version") != COMPACT_SCHEMA_VERSION:
+        if identity.get("schema_version") != self.config.schema_version:
             raise CompactCacheError(f"compact identity schema mismatch: {path}")
         if identity.get("builder_version") != COMPACT_BUILDER_VERSION:
             raise CompactCacheError(f"compact identity builder mismatch: {path}")
+        if identity.get("profile") != self.config.profile:
+            raise CompactCacheError(f"compact identity profile mismatch: {path}")
+        if identity.get("depth_levels") != self.config.depth_levels:
+            raise CompactCacheError(f"compact identity depth-level mismatch: {path}")
         current_implementation = implementation_fingerprint()
         if identity.get("implementation_sha256") != current_implementation:
             raise CompactCacheError(f"compact implementation identity mismatch: {path}")
@@ -284,8 +313,12 @@ class CompactCacheStore:
         try:
             with pa.memory_map(str(file_path), "r") as handle:
                 table = ipc.open_file(handle).read_all().combine_chunks()
-            validate_bbo_schema(table.schema, file_path)
-            metadata = validate_schema_metadata(table.schema, file_path, require=True)
+            metadata = validate_compact_schema(
+                table.schema,
+                file_path,
+                expected_depth_levels=self.config.depth_levels,
+                require_metadata=True,
+            )
         except ArrowDataError as exc:
             raise CompactCacheError(str(exc)) from exc
         for key, expected in (
@@ -307,10 +340,18 @@ class CompactCacheStore:
         exchange = table["exch_ts"].to_numpy(zero_copy_only=False)
         local = table["local_ts_raw"].to_numpy(zero_copy_only=False)
         sequence = table["source_seq"].to_numpy(zero_copy_only=False)
+        price_columns = (
+            ("bid_px", "ask_px")
+            if self.config.depth_levels == 1
+            else tuple(
+                f"{side}_px_{level}"
+                for side in ("bid", "ask")
+                for level in range(1, 6)
+            )
+        )
         prices = np.concatenate(
-            (
-                table["bid_px"].to_numpy(zero_copy_only=False),
-                table["ask_px"].to_numpy(zero_copy_only=False),
+            tuple(
+                table[name].to_numpy(zero_copy_only=False) for name in price_columns
             )
         )
         prices = prices[np.isfinite(prices) & (prices > 0)]

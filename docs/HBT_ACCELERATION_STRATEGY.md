@@ -287,15 +287,17 @@ failed date must remain explicitly incomplete and must not be reused.
 ### Disk safety for annual builds
 
 March's 98.8 million source rows imply approximately 7.1 GB of raw payload for
-the nine-field BBO schema and about 9.5 GB with a conservative 96-byte-per-row
-upper estimate. Twelve March-sized months are approximately 114 GB before the
-additional safety factor. Actual LZ4 size must be measured, not assumed.
+the historical nine-field BBO schema and about 9.5 GB with the conservative
+96-byte-per-row `bbo_v2` estimate. The fixed `top5_v1` profile uses a
+conservative 256-byte-per-row estimate for its physical fields, null bitmaps,
+alignment, and Arrow overhead. Actual LZ4 size must be measured, not assumed.
 
 Before an annual build:
 
 1. Read Parquet metadata for all requested source files.
-2. Estimate `total_source_rows * 96 * 1.20` without relying on universe
-   selectivity or compression.
+2. Estimate `total_source_rows * row_estimate * 1.20` without relying on
+   universe selectivity or compression. `row_estimate` is 96 bytes for
+   `bbo_v2` and 256 bytes for fixed-schema `top5_v1`.
 3. Add existing cache bytes and the largest one-day temporary requirement.
 4. Require the result to remain under both the configured cache budget and the
    filesystem free-space reserve.

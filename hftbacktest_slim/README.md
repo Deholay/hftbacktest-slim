@@ -1,7 +1,7 @@
 # hftbacktest-slim
 
 `hftbacktest-slim` is the project-owned, strategy-neutral compact-BBO data and
-replay runtime. Version `0.5.0` extends the stable Phase 6 public boundary: the canonical
+replay runtime. Version `0.6.0` extends the stable Phase 6 public boundary: the canonical
 schema/native dtype, Top-5 normalization, timestamp ordering, audit, streaming
 cache builder, manifest validation, sidecars, resource controls, publication,
 reader, compact CLIs, and neutral engine API live in this standalone package,
@@ -112,7 +112,14 @@ rebuilds the BBO. `source_seq` is mandatory. The aligned native
 records the schema, symbol/source/date, local-timestamp adjustment, and exact
 exchange/local ordering. Empty symbols are valid files with the same schema.
 
-Builder version `3` invalidates earlier cache identities because the new
+Builder version `4` adds `depth_levels` and the canonical depth profile to
+cache identity. `depth_levels=1` remains the default and keeps the `bbo_v2`
+physical schema and `cache_root/date=YYYYMMDD` path. Levels 2 through 5 select
+the fixed `top5_v1` schema and isolated
+`profile=top5_v1/depth_levels=N/date=YYYYMMDD` namespace, but Phase 1 rejects
+actual Top-N builds before raw scanning because Arrow population is deferred.
+The native engine remains BBO-only. Builder version `3` previously invalidated
+earlier cache identities because the new
 `tradable` state changes both the physical contract and matching behavior. A cold date
 streams projected Arrow record batches and scans each physical stock/futures
 source once while routing every requested symbol; validated warm reuse performs
@@ -121,8 +128,9 @@ stats, Parquet footer metadata, and completed compact files, never a hidden
 second raw-data scan.
 
 The default LZ4 compression also supports `none` and `zstd`. Before writing,
-the builder estimates `source_rows * 96 * 1.20`, enforces the configured cache
-cap and free-space reserve, and checks both again after every batch. It writes a
+the builder estimates `source_rows * profile_row_bytes * 1.20` (96 bytes for
+`bbo_v2`, 256 bytes for fixed `top5_v1`), enforces the configured cache cap and
+free-space reserve, and checks both again after every batch. It writes a
 same-filesystem temporary date, validates closed files and deterministic
 sidecars, writes the date manifest last, then atomically publishes. Failures
 clean only that incomplete temporary date; completed cache, raw inputs, and
@@ -192,9 +200,9 @@ Strategy pricing, execution policy, carry, capital, and reporting remain
 outside this package.
 
 The final result implementation fingerprint selection intentionally invalidates
-older result manifests. Version `0.5.0` also invalidates compact-cache identity
-because schema `bbo_v2`, builder version `3`, and trial-match trading semantics
-changed.
+older result manifests. Version `0.6.0` invalidates compact-cache identity
+through builder version `4` and the explicit depth/profile identity. Schema
+`bbo_v2`, native ABI `3`, and engine `rust-0.4.0` remain unchanged.
 Full-date, complete-month, and multi-date carry parity are recorded in
 `PHASE0_INVENTORY.md`; Phase 6 makes no performance claim.
 

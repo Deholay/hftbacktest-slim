@@ -30,6 +30,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--compression", choices=("none", "lz4", "zstd"), default="lz4"
     )
+    parser.add_argument(
+        "--compact-depth-levels",
+        type=int,
+        choices=(1, 2, 3, 4, 5),
+        default=1,
+        help="Symmetric bid/ask compact depth (Top-N population requires Phase 2).",
+    )
     parser.add_argument("--batch-rows", type=int, default=131_072)
     parser.add_argument("--max-gb", type=float, default=200.0)
     parser.add_argument("--min-free-gb", type=float, default=200.0)
@@ -71,6 +78,7 @@ def run(args: argparse.Namespace) -> dict:
     config = CompactBuildConfig(
         cache_root=args.cache_root,
         compression=args.compression,
+        depth_levels=getattr(args, "compact_depth_levels", 1),
         batch_rows=args.batch_rows,
         max_cache_bytes=int(args.max_gb * 1024**3),
         min_free_bytes=int(args.min_free_gb * 1024**3),
@@ -83,6 +91,7 @@ def run(args: argparse.Namespace) -> dict:
         "date": args.date,
         "cache_root": str(args.cache_root.resolve()),
         "compression": args.compression,
+        "depth_levels": config.depth_levels,
         "cache_state": manifest["cache_state"],
         "wall_seconds": time.perf_counter() - started_wall,
         "cpu_seconds": time.process_time() - started_cpu,
