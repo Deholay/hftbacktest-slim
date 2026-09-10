@@ -22,6 +22,9 @@ MAX_DEPTH_LEVELS = 5
 DEPTH_AGGREGATION_POLICY = "valid_positive_distinct_price_sum_qty_v1"
 BID_DEPTH_ORDERING = "price_descending_v1"
 ASK_DEPTH_ORDERING = "price_ascending_v1"
+MISSING_LEVEL_NULL_POLICY = "enabled_trailing_and_disabled_arrow_null_v1"
+PRICE_ONLY_QUANTITY_POLICY = "source_quantity_or_configured_placeholder_v1"
+TIMESTAMP_ORDERING_POLICY = "per_symbol_latency_correction_dual_stable_order_v1"
 
 BBO_PHYSICAL_FIELDS: tuple[tuple[str, pa.DataType], ...] = (
     ("source_seq", pa.uint64()),
@@ -349,13 +352,16 @@ __all__ = (
     "COMPACT_SCHEMA_VERSION",
     "DEPTH_AGGREGATION_POLICY",
     "MAX_DEPTH_LEVELS",
+    "MISSING_LEVEL_NULL_POLICY",
     "PHYSICAL_FIELDS",
     "PROJECTED_COLUMNS",
+    "PRICE_ONLY_QUANTITY_POLICY",
     "SLIM_ROW_DTYPE",
     "TOP5_PHYSICAL_FIELDS",
     "TOP5_PROFILE",
     "TOP5_SCHEMA",
     "TOP5_SCHEMA_VERSION",
+    "TIMESTAMP_ORDERING_POLICY",
     "decoded_metadata",
     "physical_fields_for_depth_levels",
     "profile_for_depth_levels",

@@ -15,6 +15,9 @@ from ..errors import CompactCacheBudgetError, CompactCacheError
 from .config import CompactBuildConfig, compact_row_estimate_bytes
 
 
+PREFLIGHT_SAFETY_FACTOR = 1.20
+
+
 def directory_bytes(path: Path) -> int:
     return (
         sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
@@ -24,7 +27,25 @@ def directory_bytes(path: Path) -> int:
 
 
 def projected_bytes(source_rows: int, depth_levels: int = 1) -> int:
-    return math.ceil(source_rows * compact_row_estimate_bytes(depth_levels) * 1.20)
+    """Estimate one completed output, ignoring compression and selectivity."""
+
+    return math.ceil(
+        source_rows
+        * compact_row_estimate_bytes(depth_levels)
+        * PREFLIGHT_SAFETY_FACTOR
+    )
+
+
+def projected_build_space(source_rows: int, depth_levels: int = 1) -> dict[str, int]:
+    """Estimate completed output plus the largest one-date staging copy."""
+
+    completed = projected_bytes(source_rows, depth_levels)
+    temporary = completed
+    return {
+        "projected_completed_bytes": completed,
+        "largest_temporary_date_bytes": temporary,
+        "required_additional_bytes": completed + temporary,
+    }
 
 
 def preflight_space(
@@ -41,11 +62,14 @@ def preflight_space(
         for source in identity["sources"]
         for file_identity in source["files"]
     )
-    estimate = projected_bytes(source_rows, config.depth_levels)
+    estimate = projected_build_space(source_rows, config.depth_levels)
+    required = estimate["required_additional_bytes"]
     existing = directory_bytes(root)
-    if existing + estimate > config.max_cache_bytes:
+    if existing + required > config.max_cache_bytes:
         raise CompactCacheBudgetError(
-            f"compact cache budget exceeded: existing={existing} projected={estimate} "
+            f"compact cache budget exceeded: existing={existing} "
+            f"projected_completed={estimate['projected_completed_bytes']} "
+            f"largest_temporary={estimate['largest_temporary_date_bytes']} "
             f"limit={config.max_cache_bytes}"
         )
     selected = root if namespace_root is None else namespace_root
@@ -53,10 +77,12 @@ def preflight_space(
     while not probe.exists() and probe != probe.parent:
         probe = probe.parent
     free = shutil.disk_usage(probe).free
-    if free - estimate < config.min_free_bytes:
+    if free - required < config.min_free_bytes:
         raise CompactCacheBudgetError(
             f"compact cache free-space reserve would be crossed: free={free} "
-            f"projected={estimate} reserve={config.min_free_bytes}"
+            f"projected_completed={estimate['projected_completed_bytes']} "
+            f"largest_temporary={estimate['largest_temporary_date_bytes']} "
+            f"reserve={config.min_free_bytes}"
         )
 
 
@@ -131,6 +157,7 @@ __all__ = (
     "create_temporary_date",
     "directory_bytes",
     "preflight_space",
+    "projected_build_space",
     "projected_bytes",
     "publish_date_atomically",
     "runtime_budget_check",

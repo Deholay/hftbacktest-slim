@@ -12,7 +12,15 @@ import pyarrow as pa
 import pyarrow.ipc as ipc
 import pyarrow.parquet as pq
 
-from ..market_data.schema import PROJECTED_COLUMNS
+from ..market_data.schema import (
+    ASK_DEPTH_ORDERING,
+    BID_DEPTH_ORDERING,
+    DEPTH_AGGREGATION_POLICY,
+    MISSING_LEVEL_NULL_POLICY,
+    PRICE_ONLY_QUANTITY_POLICY,
+    PROJECTED_COLUMNS,
+    TIMESTAMP_ORDERING_POLICY,
+)
 from .config import COMPACT_BUILDER_VERSION, CompactBuildConfig, CompactSource
 
 
@@ -112,6 +120,26 @@ def build_identity(
     package_root = Path(__file__).resolve().parents[1]
     fingerprint = implementation_fingerprint()
     normalize_path = package_root / "market_data" / "normalize.py"
+    source_facts = [
+        {
+            "kind": source.kind,
+            "symbols": list(source.symbols),
+            "status_allow": list(source.status_allow),
+            "price_only_depth_qty": source.price_only_depth_qty,
+            "price_only_quantity_policy": {
+                "identity": PRICE_ONLY_QUANTITY_POLICY,
+                "mode": (
+                    "source_quantity"
+                    if source.price_only_depth_qty is None
+                    else "configured_placeholder"
+                ),
+                "quantity": source.price_only_depth_qty,
+            },
+            "volume_scale": source.volume_scale,
+            "files": [source_identity(Path(path)) for path in source.paths],
+        }
+        for source in sources
+    ]
     return {
         "trade_date": trade_date,
         "schema_version": config.schema_version,
@@ -127,22 +155,28 @@ def build_identity(
         "compression": config.compression,
         "profile": config.profile,
         "depth_levels": config.depth_levels,
+        "aggregation_policy": DEPTH_AGGREGATION_POLICY,
+        "bid_depth_ordering": BID_DEPTH_ORDERING,
+        "ask_depth_ordering": ASK_DEPTH_ORDERING,
+        "missing_level_null_policy": MISSING_LEVEL_NULL_POLICY,
+        "price_only_quantity_policy": PRICE_ONLY_QUANTITY_POLICY,
+        "timestamp_ordering_policy": TIMESTAMP_ORDERING_POLICY,
         "timezone": config.timezone,
         "session_start_ns": config.session_start_ns,
         "session_end_ns": config.session_end_ns,
         "base_latency_ns": config.base_latency_ns,
+        "session_policy": {
+            "timezone": config.timezone,
+            "start_ns_inclusive": config.session_start_ns,
+            "end_ns_inclusive": config.session_end_ns,
+        },
         "projected_columns": list(PROJECTED_COLUMNS),
-        "sources": [
-            {
-                "kind": source.kind,
-                "symbols": list(source.symbols),
-                "status_allow": list(source.status_allow),
-                "price_only_depth_qty": source.price_only_depth_qty,
-                "volume_scale": source.volume_scale,
-                "files": [source_identity(Path(path)) for path in source.paths],
-            }
-            for source in sources
+        "projected_source_columns": list(PROJECTED_COLUMNS),
+        "source_fingerprints": [
+            {"kind": source["kind"], "files": source["files"]}
+            for source in source_facts
         ],
+        "sources": source_facts,
     }
 
 

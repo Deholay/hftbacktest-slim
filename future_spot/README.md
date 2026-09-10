@@ -406,7 +406,7 @@ only the neutral package API is supported.
 Because the execution port, adapters, and final package-owned implementation
 selection are result-defining sources, their migration changes
 `backtest_manifest.json` fingerprints and intentionally invalidates old result
-caches. Default compact schema `bbo_v2`, compact builder version 4, and native ABI 3
+caches. Default compact schema `bbo_v2`, compact builder version 5, and native ABI 3
 disable matching while TWSE `trial_status_tag=1`; old compact caches and result
 manifests are intentionally invalidated. Trade and summary table schemas are
 unchanged; the HBT settings audit additionally reports `non_tradable_rows` per leg.

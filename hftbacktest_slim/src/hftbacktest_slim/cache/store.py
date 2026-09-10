@@ -7,15 +7,15 @@ import time
 from pathlib import Path
 from typing import Any, Sequence
 
-import numpy as np
 import pyarrow as pa
 import pyarrow.ipc as ipc
 
-from ..errors import ArrowDataError, CompactCacheError
-from ..market_data.ordering import timestamp_ordering_facts, validate_order_sidecar
-from ..market_data.schema import (
-    PROJECTED_COLUMNS,
-    validate_compact_schema,
+from ..errors import CompactCacheError, CompactValidationError
+from ..market_data.ordering import validate_order_sidecar
+from ..market_data.schema import PROJECTED_COLUMNS
+from ..market_data.validation import (
+    aggregate_depth_statistics,
+    validate_compact_partition,
 )
 from .builder import build_source, source_dirname
 from .config import (
@@ -106,6 +106,11 @@ class CompactCacheStore:
                     source,
                     self.config,
                 )
+            all_symbols = {
+                f"{kind}/{symbol}": details
+                for kind, source_details in source_manifests.items()
+                for symbol, details in source_details["symbols"].items()
+            }
             payload = {
                 "schema_version": self.config.schema_version,
                 "builder_version": COMPACT_BUILDER_VERSION,
@@ -116,11 +121,47 @@ class CompactCacheStore:
                 "identity": expected,
                 "identity_sha256": canonical_sha256(expected),
                 "sources": source_manifests,
+                "aggregation_policy": expected["aggregation_policy"],
+                "bid_depth_ordering": expected["bid_depth_ordering"],
+                "ask_depth_ordering": expected["ask_depth_ordering"],
+                "missing_level_null_policy": expected["missing_level_null_policy"],
+                "price_only_quantity_policy": expected["price_only_quantity_policy"],
+                "price_only_quantity_policy_by_source": {
+                    source["kind"]: source["price_only_quantity_policy"]
+                    for source in expected["sources"]
+                },
+                "volume_scale_by_source": {
+                    source["kind"]: source["volume_scale"]
+                    for source in expected["sources"]
+                },
+                "projected_source_columns": expected["projected_source_columns"],
+                "source_fingerprints": expected["source_fingerprints"],
+                "implementation_fingerprint": expected["implementation_sha256"],
+                "compression": expected["compression"],
+                "timestamp_ordering_policy": expected["timestamp_ordering_policy"],
+                "session_policy": expected["session_policy"],
+                "output_rows": sum(
+                    int(details["output_rows"])
+                    for details in source_manifests.values()
+                ),
+                "output_bytes": sum(
+                    int(details["output_bytes"])
+                    for details in source_manifests.values()
+                ),
+                "non_tradable_rows": sum(
+                    int(details["non_tradable_rows"])
+                    for details in source_manifests.values()
+                ),
+                "depth": aggregate_depth_statistics(
+                    all_symbols, self.config.depth_levels
+                ),
                 "elapsed_seconds": time.perf_counter() - started,
             }
             # Validate every closed partition/source manifest first. The date
             # manifest is the final staged write and is required for reuse.
-            self._validate_sources(temp, trade_date, source_manifests)
+            self._validate_sources(
+                temp, trade_date, source_manifests, identity=expected
+            )
             write_json(temp / "manifest.json", payload)
             publish_date_atomically(
                 root=self.namespace_root,
@@ -194,6 +235,34 @@ class CompactCacheStore:
             raise CompactCacheError(f"compact identity profile mismatch: {path}")
         if identity.get("depth_levels") != self.config.depth_levels:
             raise CompactCacheError(f"compact identity depth-level mismatch: {path}")
+        expected_manifest_contract = {
+            "aggregation_policy": identity.get("aggregation_policy"),
+            "bid_depth_ordering": identity.get("bid_depth_ordering"),
+            "ask_depth_ordering": identity.get("ask_depth_ordering"),
+            "missing_level_null_policy": identity.get("missing_level_null_policy"),
+            "price_only_quantity_policy": identity.get("price_only_quantity_policy"),
+            "price_only_quantity_policy_by_source": {
+                item.get("kind"): item.get("price_only_quantity_policy")
+                for item in identity.get("sources", [])
+                if isinstance(item, dict)
+            },
+            "volume_scale_by_source": {
+                item.get("kind"): item.get("volume_scale")
+                for item in identity.get("sources", [])
+                if isinstance(item, dict)
+            },
+            "projected_source_columns": identity.get("projected_source_columns"),
+            "source_fingerprints": identity.get("source_fingerprints"),
+            "implementation_fingerprint": identity.get("implementation_sha256"),
+            "compression": identity.get("compression"),
+            "timestamp_ordering_policy": identity.get("timestamp_ordering_policy"),
+            "session_policy": identity.get("session_policy"),
+        }
+        for key, expected_value in expected_manifest_contract.items():
+            if expected_value is None or payload.get(key) != expected_value:
+                raise CompactCacheError(
+                    f"compact Phase 3 manifest contract mismatch for {key}: {path}"
+                )
         current_implementation = implementation_fingerprint()
         if identity.get("implementation_sha256") != current_implementation:
             raise CompactCacheError(f"compact implementation identity mismatch: {path}")
@@ -216,7 +285,67 @@ class CompactCacheStore:
         sources = payload.get("sources")
         if not isinstance(sources, dict):
             raise CompactCacheError(f"compact source manifests are missing: {path}")
-        self._validate_sources(path, trade_date, sources)
+        identity_sources = {
+            item.get("kind"): item
+            for item in identity.get("sources", [])
+            if isinstance(item, dict)
+        }
+        if set(identity_sources) != set(sources):
+            raise CompactValidationError(
+                f"date={trade_date}: source manifest set does not match cache identity"
+            )
+        for kind, source_details in sources.items():
+            source_identity_details = identity_sources[kind]
+            expected_source_facts = {
+                "scan_count": len(source_identity_details["files"]),
+                "input_rows": sum(
+                    int(item["rows"]) for item in source_identity_details["files"]
+                ),
+                "input_bytes": sum(
+                    int(item["bytes"]) for item in source_identity_details["files"]
+                ),
+                "price_only_quantity_policy": {
+                    key: value
+                    for key, value in source_identity_details[
+                        "price_only_quantity_policy"
+                    ].items()
+                    if key != "identity"
+                },
+                "volume_scale": source_identity_details["volume_scale"],
+            }
+            for key, value in expected_source_facts.items():
+                if source_details.get(key) != value:
+                    raise CompactValidationError(
+                        f"date={trade_date} source={kind}: source manifest {key} "
+                        "does not match cache identity"
+                    )
+            if set(source_details.get("symbols", {})) != set(
+                source_identity_details["symbols"]
+            ):
+                raise CompactValidationError(
+                    f"date={trade_date} source={kind}: requested symbol universe mismatch"
+                )
+        self._validate_sources(path, trade_date, sources, identity=identity)
+        all_symbols = {
+            f"{kind}/{symbol}": details
+            for kind, source_details in sources.items()
+            for symbol, details in source_details["symbols"].items()
+        }
+        date_facts = {
+            "output_rows": sum(int(item["output_rows"]) for item in sources.values()),
+            "output_bytes": sum(int(item["output_bytes"]) for item in sources.values()),
+            "non_tradable_rows": sum(
+                int(item["non_tradable_rows"]) for item in sources.values()
+            ),
+            "depth": aggregate_depth_statistics(
+                all_symbols, self.config.depth_levels
+            ),
+        }
+        for key, observed in date_facts.items():
+            if payload.get(key) != observed:
+                raise CompactValidationError(
+                    f"date={trade_date}: date manifest {key} does not match source facts"
+                )
         return payload
 
     def _validate_raw_source_identities(
@@ -253,6 +382,8 @@ class CompactCacheStore:
         path: Path,
         trade_date: str,
         sources: dict[str, Any],
+        *,
+        identity: dict[str, Any],
     ) -> None:
         for source, source_details in sources.items():
             _safe_component(source, "source")
@@ -274,6 +405,19 @@ class CompactCacheStore:
                 raise CompactCacheError(
                     f"compact symbol manifest is missing: {source_manifest_path}"
                 )
+            if source_details.get("kind") != source:
+                raise CompactValidationError(
+                    f"date={trade_date} source={source}: source manifest kind mismatch"
+                )
+            for key, expected in (
+                ("profile", self.config.profile),
+                ("schema_version", self.config.schema_version),
+                ("depth_levels", self.config.depth_levels),
+            ):
+                if source_details.get(key) != expected:
+                    raise CompactValidationError(
+                        f"date={trade_date} source={source}: source manifest {key} mismatch"
+                    )
             for symbol, details in symbols.items():
                 _safe_component(symbol, "symbol")
                 if details.get("status") == "missing":
@@ -290,6 +434,55 @@ class CompactCacheStore:
                     source=source,
                     symbol=symbol,
                     details=details,
+                    expected_base_latency_ns=int(identity["base_latency_ns"]),
+                    expected_compression=str(identity["compression"]),
+                )
+            valid = [
+                item for item in symbols.values() if item.get("status") == "valid"
+            ]
+            missing = [
+                item for item in symbols.values() if item.get("status") == "missing"
+            ]
+            empty = [item for item in valid if item.get("empty") is True]
+            output_bytes = sum(
+                int(item.get("bytes", 0))
+                + sum(
+                    int(sidecar.get("bytes", 0))
+                    for sidecar in item.get("sidecars", {}).values()
+                )
+                for item in valid
+            )
+            observed = {
+                "requested_symbol_count": len(symbols),
+                "valid_symbol_count": len(valid),
+                "empty_symbol_count": len(empty),
+                "missing_symbol_count": len(missing),
+                "empty_symbols": sorted(
+                    symbol
+                    for symbol, item in symbols.items()
+                    if item.get("status") == "valid" and item.get("empty") is True
+                ),
+                "missing_symbols": sorted(
+                    symbol
+                    for symbol, item in symbols.items()
+                    if item.get("status") == "missing"
+                ),
+                "output_rows": sum(int(item.get("rows", 0)) for item in valid),
+                "output_bytes": output_bytes,
+                "non_tradable_rows": sum(
+                    int(item.get("non_tradable_rows", 0)) for item in valid
+                ),
+                "depth": aggregate_depth_statistics(symbols, self.config.depth_levels),
+            }
+            for key, value in observed.items():
+                if source_details.get(key) != value:
+                    raise CompactValidationError(
+                        f"date={trade_date} source={source}: source aggregate {key} mismatch"
+                    )
+            if source_details.get("statistics_compact_read_count") != len(valid):
+                raise CompactValidationError(
+                    f"date={trade_date} source={source}: compact statistics read "
+                    "count mismatch"
                 )
 
     def _validate_symbol(
@@ -300,75 +493,49 @@ class CompactCacheStore:
         source: str,
         symbol: str,
         details: dict[str, Any],
+        expected_base_latency_ns: int,
+        expected_compression: str,
     ) -> None:
         if not file_path.is_file() or file_path.stat().st_size != details.get("bytes"):
             raise CompactCacheError(f"missing or changed compact symbol: {file_path}")
         if file_sha256(file_path) != details.get("sha256"):
             raise CompactCacheError(f"compact symbol checksum mismatch: {file_path}")
-        try:
-            with pa.memory_map(str(file_path), "r") as handle:
-                table = ipc.open_file(handle).read_all().combine_chunks()
-            metadata = validate_compact_schema(
-                table.schema,
-                file_path,
-                expected_depth_levels=self.config.depth_levels,
-                require_metadata=True,
-            )
-        except ArrowDataError as exc:
-            raise CompactCacheError(str(exc)) from exc
+        validation = validate_compact_partition(
+            file_path,
+            expected_depth_levels=self.config.depth_levels,
+            trade_date=trade_date,
+            source=source,
+            symbol=symbol,
+            require_identity_metadata=True,
+        )
+        metadata = validation.metadata
         for key, expected in (
             ("trade_date", trade_date),
             ("source", source),
             ("symbol", symbol),
+            ("base_latency_ns", str(expected_base_latency_ns)),
+            ("compression", expected_compression),
+            ("exchange_ordering", "exch_ts,source_seq"),
+            ("local_ordering", "corrected_local_ts,source_seq"),
         ):
             if metadata.get(key) != expected:
                 raise CompactCacheError(
                     f"compact symbol metadata mismatch for {key}: {file_path}"
                 )
-        if table.num_rows != int(details.get("rows", -1)):
-            raise CompactCacheError(f"compact symbol row-count mismatch: {file_path}")
-        adjustment = int(metadata["local_timestamp_adjustment_ns"])
-        if adjustment != int(details.get("local_timestamp_adjustment_ns", -1)):
-            raise CompactCacheError(
-                f"compact timestamp-adjustment metadata mismatch: {file_path}"
+        if (validation.facts["rows"] == 0) != (details.get("empty") is True):
+            raise CompactValidationError(
+                f"date={trade_date} source={source} symbol={symbol} "
+                f"file={file_path.name}: empty marker does not match Arrow contents"
             )
-        exchange = table["exch_ts"].to_numpy(zero_copy_only=False)
-        local = table["local_ts_raw"].to_numpy(zero_copy_only=False)
-        sequence = table["source_seq"].to_numpy(zero_copy_only=False)
-        price_columns = (
-            ("bid_px", "ask_px")
-            if self.config.depth_levels == 1
-            else tuple(
-                f"{side}_px_{level}"
-                for side in ("bid", "ask")
-                for level in range(1, 6)
-            )
-        )
-        prices = np.concatenate(
-            tuple(
-                table[name].to_numpy(zero_copy_only=False) for name in price_columns
-            )
-        )
-        prices = prices[np.isfinite(prices) & (prices > 0)]
-        if self.config.depth_levels > 1:
-            self._validate_top5_rows(table, file_path)
-        observed_bounds = {
-            "first_exch_ts": int(exchange.min()) if len(exchange) else None,
-            "last_exch_ts": int(exchange.max()) if len(exchange) else None,
-            "min_price": float(prices.min()) if len(prices) else None,
-            "max_price": float(prices.max()) if len(prices) else None,
-        }
-        for key, observed in observed_bounds.items():
+        for key, observed in validation.facts.items():
+            if key in {"min_latency_ns", "max_latency_ns", "trade_events"}:
+                continue
             if details.get(key) != observed:
-                raise CompactCacheError(
-                    f"compact partition fact mismatch for {key}: {file_path}"
+                raise CompactValidationError(
+                    f"date={trade_date} source={source} symbol={symbol} file={file_path.name}: "
+                    f"partition fact mismatch; symbol manifest {key} does not match Arrow contents"
                 )
-        ordering = timestamp_ordering_facts(
-            exchange,
-            local,
-            sequence,
-            base_latency_ns=int(metadata.get("base_latency_ns", "0")),
-        )
+        ordering = validation.ordering
         for key in (
             "raw_min_feed_latency_ns",
             "local_timestamp_adjustment_ns",
@@ -411,62 +578,6 @@ class CompactCacheStore:
                 expected_order=expected_order,
                 expected_details=sidecar,
             )
-
-    def _validate_top5_rows(self, table: pa.Table, file_path: Path) -> None:
-        """Fail closed on paired-null, enabled-depth, and ordering violations."""
-
-        row_count = table.num_rows
-        for side in ("bid", "ask"):
-            previous_values: np.ndarray | None = None
-            previous_present: np.ndarray | None = None
-            for level in range(1, 6):
-                price = table[f"{side}_px_{level}"].combine_chunks()
-                quantity = table[f"{side}_qty_{level}"].combine_chunks()
-                price_null = price.is_null().to_numpy(zero_copy_only=False)
-                quantity_null = quantity.is_null().to_numpy(zero_copy_only=False)
-                if not np.array_equal(price_null, quantity_null):
-                    raise CompactCacheError(
-                        f"compact Top-N price/quantity null mismatch: {file_path}"
-                    )
-                if level > self.config.depth_levels:
-                    if int(np.count_nonzero(price_null)) != row_count:
-                        raise CompactCacheError(
-                            f"compact Top-N disabled level is not null: {file_path}"
-                        )
-                    continue
-                present = ~price_null
-                price_values = price.to_numpy(zero_copy_only=False)
-                quantity_values = quantity.to_numpy(zero_copy_only=False)
-                if np.any(
-                    present
-                    & ~(
-                        np.isfinite(price_values)
-                        & (price_values > 0.0)
-                        & np.isfinite(quantity_values)
-                        & (quantity_values > 0.0)
-                    )
-                ):
-                    raise CompactCacheError(
-                        f"compact Top-N level contains invalid values: {file_path}"
-                    )
-                if previous_present is not None:
-                    if np.any(present & ~previous_present):
-                        raise CompactCacheError(
-                            f"compact Top-N levels contain an internal gap: {file_path}"
-                        )
-                    both = present & previous_present
-                    out_of_order = (
-                        price_values <= previous_values
-                        if side == "ask"
-                        else price_values >= previous_values
-                    )
-                    if np.any(both & out_of_order):
-                        raise CompactCacheError(
-                            f"compact Top-N levels are not distinct and ordered: {file_path}"
-                        )
-                previous_values = price_values
-                previous_present = present
-
 
 def validate_date_value(value: str) -> None:
     try:

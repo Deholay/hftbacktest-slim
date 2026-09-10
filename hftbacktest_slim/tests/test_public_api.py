@@ -47,6 +47,7 @@ EXPECTED_PUBLIC_EXPORTS = {
     "CompactCacheError",
     "CompactCacheStore",
     "CompactSource",
+    "CompactValidationError",
     "TOP5_PHYSICAL_FIELDS",
     "TOP5_ROW_ESTIMATE_BYTES",
     "TOP5_SCHEMA",
@@ -89,13 +90,13 @@ def test_public_exports_are_the_implemented_neutral_runtime() -> None:
     assert set(hftbacktest_slim.__all__) == EXPECTED_PUBLIC_EXPORTS
     assert hftbacktest_slim.SlimEngine is SlimEngine
     assert hftbacktest_slim.COMPACT_SCHEMA_VERSION == "bbo_v2"
-    assert hftbacktest_slim.COMPACT_BUILDER_VERSION == 4
+    assert hftbacktest_slim.COMPACT_BUILDER_VERSION == 5
 
 
 def test_package_version_matches_project_metadata() -> None:
     project_root = Path(__file__).resolve().parents[1]
     metadata = tomllib.loads((project_root / "pyproject.toml").read_text(encoding="utf-8"))
-    assert hftbacktest_slim.__version__ == "0.6.0"
+    assert hftbacktest_slim.__version__ == "0.7.0"
     assert metadata["project"]["version"] == hftbacktest_slim.__version__
 
 

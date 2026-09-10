@@ -292,9 +292,8 @@ def test_topn_validation_failure_cleans_temp_and_does_not_publish(tmp_path: Path
     raw = tmp_path / "daily.parquet"
     pq.write_table(_raw_table(), raw)
     store = _store(tmp_path, 2)
-    with patch.object(
-        CompactCacheStore,
-        "_validate_top5_rows",
+    with patch(
+        "hftbacktest_slim.cache.store.validate_compact_partition",
         side_effect=CompactCacheError("forced Top-N validation failure"),
     ):
         with pytest.raises(CompactCacheError, match="forced Top-N"):

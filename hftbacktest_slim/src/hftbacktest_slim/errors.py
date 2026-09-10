@@ -21,6 +21,10 @@ class CompactCacheError(SlimError, RuntimeError):
     """A compact cache cannot be built, validated, or reused safely."""
 
 
+class CompactValidationError(CompactCacheError):
+    """Compact content or its recorded facts violate the cache contract."""
+
+
 class CompactCacheBudgetError(CompactCacheError):
     """A configured compact-cache size or free-space limit was crossed."""
 
@@ -54,6 +58,7 @@ __all__ = (
     "ArrowDataError",
     "CompactCacheBudgetError",
     "CompactCacheError",
+    "CompactValidationError",
     "EngineClosedError",
     "NativeLibraryError",
     "NativeLibraryNotFoundError",

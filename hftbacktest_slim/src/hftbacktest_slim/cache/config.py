@@ -14,7 +14,7 @@ from ..market_data.schema import (
 )
 
 
-COMPACT_BUILDER_VERSION = 4
+COMPACT_BUILDER_VERSION = 5
 COMPACT_ROW_ESTIMATE_BYTES = 96
 # top5_v1 has 25 eight-byte values, one uint8, and 26 nullable validity bits.
 # Round the uncompressed payload up to a 64-byte boundary for Arrow/alignment
@@ -108,7 +108,11 @@ class CompactBuildConfig:
 
 
 def compact_row_estimate_bytes(depth_levels: object) -> int:
-    """Return a conservative uncompressed row estimate before safety factor."""
+    """Return the physical-profile row estimate before the 1.20 safety factor.
+
+    ``top5_v1`` is a fixed five-level schema, so disabled configured levels do
+    not reduce this estimate.
+    """
 
     return (
         COMPACT_ROW_ESTIMATE_BYTES

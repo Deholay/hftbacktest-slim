@@ -6,12 +6,7 @@ from os import PathLike
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-import pyarrow as pa
-import pyarrow.ipc as ipc
-
-from ..errors import CompactCacheError
-from .schema import decoded_metadata, validate_bbo_schema, validate_schema_metadata
+from .validation import validate_compact_partition
 
 
 def compact_partition_audit(
@@ -20,49 +15,32 @@ def compact_partition_audit(
     """Return raw compact facts without applying any strategy tick schedule."""
 
     path = Path(data_path)
-    try:
-        with pa.memory_map(str(path), "r") as handle:
-            table = ipc.open_file(handle).read_all().combine_chunks()
-    except (OSError, pa.ArrowException) as exc:
-        raise CompactCacheError(f"failed to read compact partition {path}: {exc}") from exc
-    validate_bbo_schema(table.schema, path)
-    validate_schema_metadata(table.schema, path, require=True)
-    metadata = decoded_metadata(table.schema, path)
-    adjustment = int(metadata["local_timestamp_adjustment_ns"])
-    exchange = table["exch_ts"].to_numpy(zero_copy_only=False)
-    local_raw = table["local_ts_raw"].to_numpy(zero_copy_only=False)
-    local = local_raw + adjustment
-    bid = table["bid_px"].to_numpy(zero_copy_only=False)
-    ask = table["ask_px"].to_numpy(zero_copy_only=False)
-    prices = np.concatenate((bid, ask))
-    prices = prices[np.isfinite(prices) & (prices > 0)]
-    volume = table["total_volume"].to_numpy(zero_copy_only=False)
-    tradable = table["tradable"].to_numpy(zero_copy_only=False)
-    if np.any((tradable != 0) & (tradable != 1)):
-        raise CompactCacheError(
-            f"compact partition {path} has tradable values outside 0/1"
-        )
-    raw_latency = local_raw - exchange
-    corrected_latency = local - exchange
+    validation = validate_compact_partition(path)
+    facts = validation.facts
     return {
-        "rows": table.num_rows,
-        "first_exch_ts": int(exchange.min()) if len(exchange) else None,
-        "last_exch_ts": int(exchange.max()) if len(exchange) else None,
-        "raw_min_feed_latency_ns": int(raw_latency.min()) if len(exchange) else None,
-        "raw_max_feed_latency_ns": int(raw_latency.max()) if len(exchange) else None,
-        "local_timestamp_adjustment_ns": adjustment,
-        "min_latency_ns": int(corrected_latency.min()) if len(exchange) else None,
-        "max_latency_ns": int(corrected_latency.max()) if len(exchange) else None,
-        "min_price": float(prices.min()) if len(prices) else None,
-        "max_price": float(prices.max()) if len(prices) else None,
+        **{
+            key: facts[key]
+            for key in (
+                "rows",
+                "profile",
+                "schema_version",
+                "depth_levels",
+                "first_exch_ts",
+                "last_exch_ts",
+                "raw_min_feed_latency_ns",
+                "raw_max_feed_latency_ns",
+                "local_timestamp_adjustment_ns",
+                "min_latency_ns",
+                "max_latency_ns",
+                "min_price",
+                "max_price",
+                "trade_events",
+                "non_tradable_rows",
+                "depth",
+            )
+        },
         "depth_events": None,
-        "trade_events": (
-            int(np.sum((np.diff(volume) > 0) & (tradable[1:] != 0)))
-            if len(volume) > 1
-            else 0
-        ),
-        "non_tradable_rows": int(np.count_nonzero(tradable == 0)),
-        "metadata": metadata,
+        "metadata": validation.metadata,
         "schema_valid": True,
     }
 

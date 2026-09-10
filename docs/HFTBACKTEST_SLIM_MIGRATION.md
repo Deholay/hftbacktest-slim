@@ -38,6 +38,14 @@ depth/profile identity and namespaces, metadata validation, CLI scaffolding,
 and profile-aware preflight estimates. Top-N population and depth-sensitive
 matching are not implemented; builds above one level fail before raw scans.
 
+Configurable-depth Phase 3 extension (2026-09-10): package `0.7.0` and compact
+builder version `5` retain physical schemas `bbo_v2` and `top5_v1`, Rust
+crate/engine `0.4.0`, and native ABI `3`. Batch-wise compact-content validation
+now gates atomic publication and cache reuse, while symbol/source/date manifests
+record exact depth availability and policy facts. Older caches lacking this
+contract rebuild conservatively. Runtime multi-level readers and matching stay
+deferred.
+
 For package location, code ownership, public API, and dependency direction,
 this document supersedes older extraction locations in
 `HBT_ACCELERATION_STRATEGY.md`. That strategy document and `AGENTS.md` remain

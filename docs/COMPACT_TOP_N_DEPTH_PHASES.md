@@ -5,8 +5,10 @@
 This document defines the staged implementation of configurable symmetric
 compact market depth. Phase 0 and Phase 1 froze BBO behavior and introduced
 configuration, physical schema, metadata, identity, namespace, CLI, and
-resource-estimation contracts. Phase 2 now populates normalized Top-N Arrow
-rows without changing replay or matching behavior.
+resource-estimation contracts. Phase 2 populates normalized Top-N Arrow rows.
+Phase 3 adds batch-wise content validation, exact depth statistics, conservative
+manifest invalidation, and completed-plus-temporary disk preflight accounting,
+without changing replay or matching behavior.
 
 The one user-facing selector is `depth_levels`, exposed on the command line as
 `--compact-depth-levels`. It accepts only Python integers from 1 through 5;
@@ -150,8 +152,8 @@ guard and supports streaming `top5_v1` publication and profile-aware
 `read_symbol()` tables. Full-market execution fails before cache construction
 for `depth_levels>1` because its engine readers remain BBO-only.
 
-Later phases must separately implement richer manifest depth analytics,
-multi-level reference-HBT reconstruction, runtime readers, and any future
-depth-sensitive execution mode. Native engine or matching changes require a
-separate semantic version, ABI review where layouts change, regression
-baseline, and parity gate.
+Phase 3 is the final implemented phase in this change. Later phases must
+separately implement multi-level reference-HBT reconstruction, runtime readers,
+and any future depth-sensitive execution mode. Native engine or matching
+changes require a separate semantic version, ABI review where layouts change,
+regression baseline, and parity gate.
