@@ -19,7 +19,7 @@ from .errors import (
 )
 from .engine.replay import SlimEngine
 from .models import DepthView, FeedLatency, OrderLatency, OrderView
-from .version import SLIM_ENGINE_VERSION, __version__
+from .version import NATIVE_ABI_VERSION, SLIM_ENGINE_VERSION, __version__
 
 __all__ = (
     "AbiMismatchError",
@@ -34,6 +34,7 @@ __all__ = (
     "NativeCallError",
     "NativeLibraryError",
     "NativeLibraryNotFoundError",
+    "NATIVE_ABI_VERSION",
     "OrderLatency",
     "OrderStatus",
     "OrderSubmissionError",

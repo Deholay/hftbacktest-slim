@@ -51,13 +51,15 @@ from hftbacktest_slim import (  # noqa: E402
     CompactCacheError,
     CompactCacheStore,
     CompactSource,
-    UnsupportedCapabilityError,
+    NATIVE_ABI_VERSION,
+    __version__ as HFTBACKTEST_SLIM_PACKAGE_VERSION,
     profile_for_depth_levels,
     schema_version_for_depth_levels,
 )
 from hftbacktest_slim.market_data import compact_partition_audit  # noqa: E402
 from scripts.compact_hbt_adapter import (  # noqa: E402
     ADAPTER_VERSION as COMPACT_HBT_ADAPTER_VERSION,
+    reference_npz_is_reusable,
     write_reference_npz_from_compact,
 )
 from hftbacktest_slim import SLIM_ENGINE_VERSION  # noqa: E402
@@ -325,7 +327,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         choices=(1, 2, 3, 4, 5),
         default=1,
-        help="Symmetric compact depth; execution currently supports BBO (1) only.",
+        help=(
+            "Symmetric compact depth. Reference reconstructs every selected level; "
+            "slim consumes normalized level 1 only."
+        ),
     )
     parser.add_argument("--compact-cache-max-gb", type=float, default=200.0)
     parser.add_argument("--compact-cache-min-free-gb", type=float, default=200.0)
@@ -1085,6 +1090,11 @@ def run_backtests_with_position_carry(
 
             stage_started = time.perf_counter()
             event_paths, conversion_status = build_event_data(args, date_records)
+            # A cold compact build creates the checksum recorded by the daily
+            # result identity. Recompute after publication so the first run and
+            # every later resume compare the same result-defining payload.
+            if getattr(args, "market_data_cache", "event_npz") == "compact":
+                input_identity = hbt_manifest_payload(args, date_records)
             timing_rows.append(
                 stage_timing_row(trade_date, "event_data", stage_started, len(date_records), "executed")
             )
@@ -1150,6 +1160,13 @@ def run_backtests_with_position_carry(
                 metadata={
                     "engine": getattr(args, "engine", "reference"),
                     "engine_version": execution_engine_version(args),
+                    "compact_profile": (
+                        profile_for_depth_levels(
+                            getattr(args, "compact_depth_levels", 1)
+                        )
+                        if getattr(args, "market_data_cache", "event_npz") == "compact"
+                        else None
+                    ),
                     "compact_schema_version": (
                         schema_version_for_depth_levels(
                             getattr(args, "compact_depth_levels", 1)
@@ -1160,6 +1177,30 @@ def run_backtests_with_position_carry(
                     "compact_builder_version": (
                         COMPACT_BUILDER_VERSION
                         if getattr(args, "market_data_cache", "event_npz") == "compact"
+                        else None
+                    ),
+                    "compact_depth_levels": (
+                        getattr(args, "compact_depth_levels", 1)
+                        if getattr(args, "market_data_cache", "event_npz") == "compact"
+                        else None
+                    ),
+                    "compact_identity_sha256": getattr(
+                        args, "compact_run_identities", {}
+                    ).get(trade_date),
+                    "compact_reference_adapter_version": (
+                        COMPACT_HBT_ADAPTER_VERSION
+                        if getattr(args, "engine", "reference") == "reference"
+                        and getattr(args, "market_data_cache", "event_npz") == "compact"
+                        else None
+                    ),
+                    "slim_package_version": (
+                        HFTBACKTEST_SLIM_PACKAGE_VERSION
+                        if getattr(args, "engine", "reference") == "slim"
+                        else None
+                    ),
+                    "slim_native_abi_version": (
+                        NATIVE_ABI_VERSION
+                        if getattr(args, "engine", "reference") == "slim"
                         else None
                     ),
                     "strategy_clock": strategy_clock_manifest(args),
@@ -1494,12 +1535,6 @@ def build_event_data(
     records: list[DailyPairRecord],
 ) -> tuple[dict[str, dict[str, Path]], pd.DataFrame]:
     if getattr(args, "market_data_cache", "event_npz") == "compact":
-        depth_levels = getattr(args, "compact_depth_levels", 1)
-        if depth_levels > 1:
-            raise UnsupportedCapabilityError(
-                "full-market execution cannot consume top5_v1 before Phase 4; "
-                "build Top-N caches with hftbacktest-slim-build-cache"
-            )
         return build_compact_event_data(args, records)
     args.spot_input_csv_by_symbol = prepare_spot_input_csvs(args, records)
     future_results = prepare_future_events(args, records)
@@ -1577,12 +1612,15 @@ def build_compact_event_data(
     timezone = ZoneInfo("Asia/Taipei")
     session_start_ns = parse_timestamp(args.session_start, "auto", trade_date, timezone)
     session_end_ns = parse_timestamp(args.session_end, "auto", trade_date, timezone)
+    depth_levels = getattr(args, "compact_depth_levels", 1)
+    compact_profile = profile_for_depth_levels(depth_levels)
+    compact_schema_version = schema_version_for_depth_levels(depth_levels)
     store = CompactCacheStore(
         CompactBuildConfig(
             cache_root=Path(args.compact_cache_root),
             compression=args.compact_cache_compression,
             profile=args.compact_cache_profile,
-            depth_levels=getattr(args, "compact_depth_levels", 1),
+            depth_levels=depth_levels,
             session_start_ns=session_start_ns,
             session_end_ns=session_end_ns,
             batch_rows=args.compact_cache_batch_rows,
@@ -1620,7 +1658,15 @@ def build_compact_event_data(
                     "spot_error": error,
                     "future_error": error,
                     "compact_cache_state": "error",
+                    "compact_profile": compact_profile,
+                    "compact_schema_version": compact_schema_version,
+                    "compact_depth_levels": depth_levels,
                     "compact_identity_sha256": None,
+                    "compact_reference_adapter_version": (
+                        COMPACT_HBT_ADAPTER_VERSION
+                        if getattr(args, "engine", "reference") == "reference"
+                        else None
+                    ),
                     "compact_build_invocation_scan_count": 0,
                 }
                 for record in records
@@ -1628,6 +1674,10 @@ def build_compact_event_data(
         )
     paths_by_run_key: dict[str, dict[str, Path]] = {}
     audit_rows: list[dict[str, Any]] = []
+    compact_identities = getattr(args, "compact_run_identities", None)
+    if compact_identities is None:
+        compact_identities = args.compact_run_identities = {}
+    compact_identities[trade_date] = manifest["identity_sha256"]
     reference_mode = getattr(args, "engine", "reference") == "reference"
     for record in records:
         leg_paths: dict[str, Path] = {}
@@ -1642,28 +1692,21 @@ def build_compact_event_data(
                 continue
             compact_path = store.date_path(trade_date) / f"source={source}" / details["file"]
             if reference_mode:
-                output = (
-                    WORKSPACE_ROOT
-                    / "data"
-                    / "tw_compact_reference_events"
-                    / f"date={date_nodash}"
-                    / f"source={source}"
-                    / f"{symbol}.npz"
+                output = compact_reference_event_path(
+                    depth_levels=depth_levels,
+                    trade_date=trade_date,
+                    source=source,
+                    symbol=str(symbol),
                 )
-                adapter_manifest = output.with_suffix(output.suffix + ".compact.json")
-                reusable = False
-                if output.is_file() and adapter_manifest.is_file() and not args.rebuild_event_data:
-                    try:
-                        saved = json.loads(adapter_manifest.read_text(encoding="utf-8"))
-                        reusable = (
-                            saved.get("adapter_version") == COMPACT_HBT_ADAPTER_VERSION
-                            and saved.get("compact_schema_version")
-                            == manifest["schema_version"]
-                            and saved.get("compact_identity_sha256")
-                            == manifest["identity_sha256"]
-                        )
-                    except (OSError, json.JSONDecodeError):
-                        reusable = False
+                reusable = not getattr(args, "rebuild_event_data", False) and reference_npz_is_reusable(
+                    output,
+                    compact_schema_version=compact_schema_version,
+                    compact_profile=compact_profile,
+                    depth_levels=depth_levels,
+                    compact_identity_sha256=manifest["identity_sha256"],
+                    trade_date=trade_date,
+                    npz_compression=args.npz_compression,
+                )
                 if not reusable:
                     write_reference_npz_from_compact(
                         store.read_symbol(trade_date, source, str(symbol)),
@@ -1693,13 +1736,39 @@ def build_compact_event_data(
                 "spot_error": errors.get("spot"),
                 "future_error": errors.get("future"),
                 "compact_cache_state": manifest["cache_state"],
+                "compact_profile": compact_profile,
+                "compact_schema_version": compact_schema_version,
+                "compact_depth_levels": depth_levels,
                 "compact_identity_sha256": manifest["identity_sha256"],
+                "compact_reference_adapter_version": (
+                    COMPACT_HBT_ADAPTER_VERSION if reference_mode else None
+                ),
                 "compact_build_invocation_scan_count": manifest["build_invocation_scan_count"],
             }
         )
         if not ok and not args.continue_on_error:
             raise RuntimeError(f"compact data missing for {record.run_key}: {errors}")
     return paths_by_run_key, pd.DataFrame(audit_rows)
+
+
+def compact_reference_event_path(
+    *, depth_levels: int, trade_date: str, source: str, symbol: str
+) -> Path:
+    """Return the non-colliding reference-NPZ namespace for one compact profile."""
+
+    output_root = WORKSPACE_ROOT / "data" / "tw_compact_reference_events"
+    if depth_levels > 1:
+        output_root = (
+            output_root
+            / f"profile={schema_version_for_depth_levels(depth_levels)}"
+            / f"depth_levels={depth_levels}"
+        )
+    return (
+        output_root
+        / f"date={trade_date.replace('-', '')}"
+        / f"source={source}"
+        / f"{symbol}.npz"
+    )
 
 
 def expected_event_path(args: argparse.Namespace, symbol: str, source_kind: str, trade_date: str) -> Path:
@@ -2070,11 +2139,40 @@ def summarize_asset(args: argparse.Namespace, record: DailyPairRecord, leg: str,
         "trade_events": summary["trade_events"],
         "non_tradable_rows": summary.get("non_tradable_rows", 0),
         "engine": getattr(args, "engine", "reference"),
+        "compact_profile": (
+            profile_for_depth_levels(getattr(args, "compact_depth_levels", 1))
+            if getattr(args, "market_data_cache", "event_npz") == "compact"
+            else None
+        ),
         "compact_schema_version": schema_version_for_depth_levels(
             getattr(args, "compact_depth_levels", 1)
         )
         if getattr(args, "market_data_cache", "event_npz") == "compact"
         else None,
+        "compact_depth_levels": (
+            getattr(args, "compact_depth_levels", 1)
+            if getattr(args, "market_data_cache", "event_npz") == "compact"
+            else None
+        ),
+        "compact_identity_sha256": getattr(args, "compact_run_identities", {}).get(
+            record.trade_date
+        ),
+        "compact_reference_adapter_version": (
+            COMPACT_HBT_ADAPTER_VERSION
+            if getattr(args, "engine", "reference") == "reference"
+            and getattr(args, "market_data_cache", "event_npz") == "compact"
+            else None
+        ),
+        "slim_package_version": (
+            HFTBACKTEST_SLIM_PACKAGE_VERSION
+            if getattr(args, "engine", "reference") == "slim"
+            else None
+        ),
+        "slim_native_abi_version": (
+            NATIVE_ABI_VERSION
+            if getattr(args, "engine", "reference") == "slim"
+            else None
+        ),
     }
 
 
@@ -2450,7 +2548,7 @@ def hbt_result_csvs_exist(output_dir: Path) -> bool:
     return all(paths[name].exists() for name in required)
 
 
-HBT_CACHE_SCHEMA_VERSION = 10
+HBT_CACHE_SCHEMA_VERSION = 11
 HBT_MANIFEST_NAME = "backtest_manifest.json"
 REFERENCE_ENGINE_VERSION = "reference-v1"
 HBT_RESULT_ARG_NAMES = (
@@ -2594,6 +2692,30 @@ def _hbt_implementation_paths(
     )
 
 
+def _compact_identity_manifest_rows(
+    args: argparse.Namespace, records: list[DailyPairRecord]
+) -> list[dict[str, Any]]:
+    if getattr(args, "market_data_cache", "event_npz") != "compact":
+        return []
+    depth_levels = getattr(args, "compact_depth_levels", 1)
+    root = Path(args.compact_cache_root)
+    if depth_levels > 1:
+        root = root / "profile=top5_v1" / f"depth_levels={depth_levels}"
+    known = dict(getattr(args, "compact_run_identities", {}))
+    rows: list[dict[str, Any]] = []
+    for trade_date in sorted({record.trade_date for record in records}):
+        checksum = known.get(trade_date)
+        if checksum is None:
+            manifest_path = root / f"date={trade_date.replace('-', '')}" / "manifest.json"
+            try:
+                payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+                checksum = payload.get("identity_sha256")
+            except (OSError, json.JSONDecodeError):
+                checksum = None
+        rows.append({"trade_date": trade_date, "identity_sha256": checksum})
+    return rows
+
+
 def hbt_manifest_payload(args: argparse.Namespace, records: list[DailyPairRecord]) -> dict[str, Any]:
     config_paths = sorted({record.config_path.resolve() for record in records}, key=str)
     if getattr(args, "market_data_cache", "event_npz") == "compact":
@@ -2631,6 +2753,11 @@ def hbt_manifest_payload(args: argparse.Namespace, records: list[DailyPairRecord
         "engine_version": execution_engine_version(args),
         "execution_port": "future-spot-execution-port-v2",
         "execution_adapter": f"{getattr(args, 'engine', 'reference')}-v2",
+        "compact_profile": (
+            profile_for_depth_levels(getattr(args, "compact_depth_levels", 1))
+            if getattr(args, "market_data_cache", "event_npz") == "compact"
+            else None
+        ),
         "compact_schema_version": (
             schema_version_for_depth_levels(
                 getattr(args, "compact_depth_levels", 1)
@@ -2643,10 +2770,26 @@ def hbt_manifest_payload(args: argparse.Namespace, records: list[DailyPairRecord
             if getattr(args, "market_data_cache", "event_npz") == "compact"
             else None
         ),
+        "compact_depth_levels": (
+            getattr(args, "compact_depth_levels", 1)
+            if getattr(args, "market_data_cache", "event_npz") == "compact"
+            else None
+        ),
+        "compact_identities": _compact_identity_manifest_rows(args, records),
         "compact_reference_adapter_version": (
             COMPACT_HBT_ADAPTER_VERSION
             if getattr(args, "engine", "reference") == "reference"
             and getattr(args, "market_data_cache", "event_npz") == "compact"
+            else None
+        ),
+        "slim_package_version": (
+            HFTBACKTEST_SLIM_PACKAGE_VERSION
+            if getattr(args, "engine", "reference") == "slim"
+            else None
+        ),
+        "slim_native_abi_version": (
+            NATIVE_ABI_VERSION
+            if getattr(args, "engine", "reference") == "slim"
             else None
         ),
         "daily_result_schema_version": DAILY_RESULT_SCHEMA_VERSION,

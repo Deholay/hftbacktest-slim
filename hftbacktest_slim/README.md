@@ -1,7 +1,7 @@
 # hftbacktest-slim
 
 `hftbacktest-slim` is the project-owned, strategy-neutral compact-BBO data and
-replay runtime. Version `0.7.0` extends the stable Phase 6 public boundary: the canonical
+replay runtime. Version `0.8.0` extends the stable Phase 6 public boundary: the canonical
 schema/native dtype, Top-5 normalization, timestamp ordering, audit, streaming
 cache builder, manifest validation, sidecars, resource controls, publication,
 reader, compact CLIs, and neutral engine API live in this standalone package,
@@ -120,8 +120,11 @@ physical schema and `cache_root/date=YYYYMMDD` path. Levels 2 through 5 select
 the fixed `top5_v1` schema and isolated
 `profile=top5_v1/depth_levels=N/date=YYYYMMDD` namespace. The streaming builder
 normalizes distinct levels, aggregates repeated prices, sorts each side, and
-uses explicit Arrow nulls for unavailable and disabled levels. The native
-engine and full-market execution path remain BBO-only. Builder version `3` previously invalidated
+uses explicit Arrow nulls for unavailable and disabled levels. The slim native
+engine consumes only normalized level 1 from either profile; levels 2–5 remain
+in Arrow for reference HftBacktest reconstruction. Full-market compact runs
+accept depth 1 through 5: reference consumes every selected level and slim
+projects level 1 into the unchanged ABI. Builder version `3` previously invalidated
 earlier cache identities because the new
 `tradable` state changes both the physical contract and matching behavior. A cold date
 streams projected Arrow record batches and scans each physical stock/futures
@@ -206,7 +209,8 @@ Strategy pricing, execution policy, carry, capital, and reporting remain
 outside this package.
 
 The final result implementation fingerprint selection intentionally invalidates
-older result manifests. Version `0.7.0` invalidates compact-cache identity
+older result manifests. Version `0.8.0` adds Top-N reader/reference-adapter
+result identities without changing compact schemas or builder version. Version `0.7.0` invalidates compact-cache identity
 through builder version `5` and the Phase 3 manifest/content-validation
 contract. Compact files are validated incrementally by record batch; manifests
 record per-level availability, complete/single-sided/empty book counts, source

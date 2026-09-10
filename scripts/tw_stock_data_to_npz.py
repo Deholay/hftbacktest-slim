@@ -109,7 +109,10 @@ DEFAULT_DAILY_PARQUET_DIRS = {
 
 PRICE_ONLY_DEPTH_SOURCE_KINDS = {"odd_lot", "etf"}
 TWSE_STATUS_SOURCE_KINDS = {"stock", "odd_lot", "etf"}
-EVENT_CONVERTER_VERSION = 2
+# Version 3 makes ``levels=N`` select N normalized distinct prices when a
+# source frame contains the full Top-5 input, matching compact Top-N reference
+# reconstruction. Existing archives rebuild conservatively.
+EVENT_CONVERTER_VERSION = 3
 DEFAULT_DATA_PLATFORM_BASE = "/mnt/z/數據平台"
 
 
@@ -1144,6 +1147,7 @@ def _fill_events_from_columns(
     ask_prices: np.ndarray,
     ask_quantities: np.ndarray,
     tradable: np.ndarray,
+    selected_levels: int,
     volume_scale: float,
     price_only_depth_qty: float,
     use_price_only_depth_qty: bool,
@@ -1248,30 +1252,33 @@ def _fill_events_from_columns(
                 )
                 trade_events += 1
 
-        if emit_depth:
-            bid_count = aggregate_depth_side(
-                bid_prices,
-                bid_quantities,
-                row,
-                volume_scale,
-                price_only_depth_qty,
-                use_price_only_depth_qty,
-                False,
-                work_prices,
-                work_quantities,
-            )
-            if bid_count > 0:
+        bid_count = aggregate_depth_side(
+            bid_prices,
+            bid_quantities,
+            row,
+            volume_scale,
+            price_only_depth_qty,
+            use_price_only_depth_qty,
+            False,
+            work_prices,
+            work_quantities,
+        )
+        current_bid = np.nan
+        if bid_count > 0:
+            current_bid = work_prices[0]
+            emitted_bid_count = min(bid_count, selected_levels)
+            if emit_depth:
                 out_rn = _write_event(
                     out,
                     out_rn,
                     DEPTH_CLEAR_EVENT | BUY_EVENT,
                     exch_ts[row],
                     local_ts[row],
-                    work_prices[bid_count - 1],
+                    work_prices[emitted_bid_count - 1],
                     0.0,
                 )
                 depth_events += 1
-                for index in range(bid_count):
+                for index in range(emitted_bid_count):
                     out_rn = _write_event(
                         out,
                         out_rn,
@@ -1282,31 +1289,35 @@ def _fill_events_from_columns(
                         work_quantities[index],
                     )
                     depth_events += 1
-                replay_best_bid = work_prices[0]
+                replay_best_bid = current_bid
 
-            ask_count = aggregate_depth_side(
-                ask_prices,
-                ask_quantities,
-                row,
-                volume_scale,
-                price_only_depth_qty,
-                use_price_only_depth_qty,
-                True,
-                work_prices,
-                work_quantities,
-            )
-            if ask_count > 0:
+        ask_count = aggregate_depth_side(
+            ask_prices,
+            ask_quantities,
+            row,
+            volume_scale,
+            price_only_depth_qty,
+            use_price_only_depth_qty,
+            True,
+            work_prices,
+            work_quantities,
+        )
+        current_ask = np.nan
+        if ask_count > 0:
+            current_ask = work_prices[0]
+            emitted_ask_count = min(ask_count, selected_levels)
+            if emit_depth:
                 out_rn = _write_event(
                     out,
                     out_rn,
                     DEPTH_CLEAR_EVENT | SELL_EVENT,
                     exch_ts[row],
                     local_ts[row],
-                    work_prices[ask_count - 1],
+                    work_prices[emitted_ask_count - 1],
                     0.0,
                 )
                 depth_events += 1
-                for index in range(ask_count):
+                for index in range(emitted_ask_count):
                     out_rn = _write_event(
                         out,
                         out_rn,
@@ -1317,11 +1328,11 @@ def _fill_events_from_columns(
                         work_quantities[index],
                     )
                     depth_events += 1
-                replay_best_ask = work_prices[0]
+                replay_best_ask = current_ask
 
         if qa_rows_checked < qa_sample_rows:
-            expected_bid = bid_prices[row, 0]
-            expected_ask = ask_prices[row, 0]
+            expected_bid = current_bid
+            expected_ask = current_ask
             if (
                 np.isfinite(expected_bid)
                 and expected_bid > 0.0
@@ -1338,8 +1349,8 @@ def _fill_events_from_columns(
 
         previous_total_volume = total_volume[row]
         has_previous_volume = True
-        previous_bid = bid_prices[row, 0]
-        previous_ask = ask_prices[row, 0]
+        previous_bid = current_bid
+        previous_ask = current_ask
         previous_last_price = last_price[row]
 
     return (
@@ -1369,10 +1380,23 @@ def build_events_from_parquet_frame(
     total_volume_float[~np.isfinite(total_volume_float)] = 0.0
     total_volume = np.ascontiguousarray(total_volume_float.astype(np.int64))
     last_price = _float_column(df, "last_price")
-    bid_prices = _float_matrix(df, [f"bid_price{level}" for level in range(1, args.levels + 1)])
-    ask_prices = _float_matrix(df, [f"ask_price{level}" for level in range(1, args.levels + 1)])
-    bid_quantities = _float_matrix(df, [f"bid_volume{level}" for level in range(1, args.levels + 1)])
-    ask_quantities = _float_matrix(df, [f"ask_volume{level}" for level in range(1, args.levels + 1)])
+    selected_levels = int(args.levels)
+    source_levels = selected_levels
+    for level in range(selected_levels + 1, 6):
+        required = (
+            f"bid_price{level}",
+            f"bid_volume{level}",
+            f"ask_price{level}",
+            f"ask_volume{level}",
+        )
+        if all(name in df.columns for name in required):
+            source_levels = level
+        else:
+            break
+    bid_prices = _float_matrix(df, [f"bid_price{level}" for level in range(1, source_levels + 1)])
+    ask_prices = _float_matrix(df, [f"ask_price{level}" for level in range(1, source_levels + 1)])
+    bid_quantities = _float_matrix(df, [f"bid_volume{level}" for level in range(1, source_levels + 1)])
+    ask_quantities = _float_matrix(df, [f"ask_volume{level}" for level in range(1, source_levels + 1)])
     tradable = np.ones(df.height, dtype=np.bool_)
     if "tradable" in df.columns:
         tradable = _float_column(df, "tradable", default=1.0) != 0.0
@@ -1394,7 +1418,7 @@ def build_events_from_parquet_frame(
     if args.no_depth and stats.non_tradable_rows:
         raise ValueError("TWSE trial-match blocking requires depth events")
 
-    max_events_per_row = max(4, 2 * args.levels + 3)
+    max_events_per_row = max(4, 2 * selected_levels + 3)
     raw = np.empty(df.height * max_events_per_row, dtype=EVENT_DTYPE)
     trade_side_code = {"buy": 1, "sell": -1, "infer": 0, "none": 0}[args.trade_side]
     price_only_depth_qty = 0.0 if args.price_only_depth_qty is None else args.price_only_depth_qty
@@ -1417,6 +1441,7 @@ def build_events_from_parquet_frame(
         ask_prices,
         ask_quantities,
         tradable,
+        selected_levels,
         args.volume_scale,
         price_only_depth_qty,
         args.price_only_depth_qty is not None,

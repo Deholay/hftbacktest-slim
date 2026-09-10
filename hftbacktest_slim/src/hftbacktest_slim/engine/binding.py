@@ -10,9 +10,9 @@ from typing import Any, Sequence
 
 from ..config import AssetConfig
 from ..errors import AbiMismatchError, NativeLibraryError, NativeLibraryNotFoundError
+from ..version import NATIVE_ABI_VERSION
 
 
-NATIVE_ABI_VERSION = 3
 LIBRARY_ENVIRONMENT_VARIABLE = "HFTBACKTEST_SLIM_LIBRARY"
 
 

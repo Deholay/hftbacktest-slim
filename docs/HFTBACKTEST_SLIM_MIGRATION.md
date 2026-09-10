@@ -46,6 +46,15 @@ record exact depth availability and policy facts. Older caches lacking this
 contract rebuild conservatively. Runtime multi-level readers and matching stay
 deferred.
 
+Configurable-depth Phase 4 extension (2026-09-10): package `0.8.0` retains
+physical schemas `bbo_v2`/`top5_v1`, compact builder version `5`, Rust
+crate/engine `0.4.0`, and native ABI `3`. The package reader validates and
+projects `top5_v1` level 1 into the unchanged native BBO row layout. The
+reference compact adapter outside the package reconstructs selected levels
+through five, and full-market result identities record the selected profile and
+depth. This market-data profile integration does not add native depth state,
+depth-sensitive matching, partial fills, passive orders, or queue behavior.
+
 For package location, code ownership, public API, and dependency direction,
 this document supersedes older extraction locations in
 `HBT_ACCELERATION_STRATEGY.md`. That strategy document and `AGENTS.md` remain

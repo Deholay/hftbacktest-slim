@@ -32,6 +32,7 @@ from .status import (
     is_twse_trial_status,
     twse_trial_status_mask,
 )
+from .validation import validate_compact_table
 
 __all__ = (
     "BBO_SCHEMA",
@@ -57,6 +58,7 @@ __all__ = (
     "top5_schema_metadata",
     "twse_trial_status_mask",
     "validate_compact_schema",
+    "validate_compact_table",
     "validate_depth_levels",
     "validate_top5_schema",
     "validate_top5_schema_metadata",

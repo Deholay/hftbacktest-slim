@@ -18,6 +18,7 @@ from hftbacktest_slim import (
     NativeCallError,
     NativeLibraryError,
     NativeLibraryNotFoundError,
+    NATIVE_ABI_VERSION,
     OrderLatency,
     OrderStatus,
     OrderSubmissionError,
@@ -58,6 +59,7 @@ EXPECTED_PUBLIC_EXPORTS = {
     "NativeCallError",
     "NativeLibraryError",
     "NativeLibraryNotFoundError",
+    "NATIVE_ABI_VERSION",
     "OrderLatency",
     "OrderStatus",
     "OrderSubmissionError",
@@ -96,11 +98,12 @@ def test_public_exports_are_the_implemented_neutral_runtime() -> None:
 def test_package_version_matches_project_metadata() -> None:
     project_root = Path(__file__).resolve().parents[1]
     metadata = tomllib.loads((project_root / "pyproject.toml").read_text(encoding="utf-8"))
-    assert hftbacktest_slim.__version__ == "0.7.0"
+    assert hftbacktest_slim.__version__ == "0.8.0"
     assert metadata["project"]["version"] == hftbacktest_slim.__version__
 
 
 def test_enum_integer_values_match_the_current_native_abi() -> None:
+    assert NATIVE_ABI_VERSION == 3
     assert set(TimeInForce) == {TimeInForce.FOK, TimeInForce.IOC}
     assert set(OrderStatus) == {
         OrderStatus.NEW,

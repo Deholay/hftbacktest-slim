@@ -96,40 +96,48 @@ def _empty_depth(depth_levels: int) -> dict[str, Any]:
     }
 
 
-def validate_compact_partition(
-    path: Path,
+def _validate_compact(
+    data: Path | pa.Table,
     *,
+    path: Path,
     expected_depth_levels: int | None = None,
     trade_date: str | None = None,
     source: str | None = None,
     symbol: str | None = None,
     require_identity_metadata: bool = False,
+    require_metadata: bool = True,
 ) -> PartitionValidation:
-    """Validate one Arrow file batch-by-batch and return exact manifest facts.
-
-    Depth columns are converted one record batch at a time. Only the three
-    arrays required by the pre-existing timestamp/sidecar contract are retained
-    across batches.
-    """
-
-    path = Path(path)
     handle: pa.MemoryMappedFile | None = None
-    try:
-        handle = pa.memory_map(str(path), "r")
-        reader = ipc.open_file(handle)
-    except (OSError, pa.ArrowException) as exc:
-        if handle is not None:
-            handle.close()
-        raise CompactCacheError(
-            f"failed to read compact partition {path}: {exc}"
-        ) from exc
+    if isinstance(data, pa.Table):
+        table = data.combine_chunks()
+
+        class _TableReader:
+            schema = table.schema
+            batches = table.to_batches()
+            num_record_batches = len(batches)
+
+            @classmethod
+            def get_batch(cls, index: int) -> pa.RecordBatch:
+                return cls.batches[index]
+
+        reader = _TableReader()
+    else:
+        try:
+            handle = pa.memory_map(str(data), "r")
+            reader = ipc.open_file(handle)
+        except (OSError, pa.ArrowException) as exc:
+            if handle is not None:
+                handle.close()
+            raise CompactCacheError(
+                f"failed to read compact partition {path}: {exc}"
+            ) from exc
     try:
         try:
             metadata = validate_compact_schema(
                 reader.schema,
                 path,
                 expected_depth_levels=expected_depth_levels,
-                require_metadata=True,
+                require_metadata=require_metadata,
             )
         except ArrowDataError as exc:
             raise _error(
@@ -139,7 +147,7 @@ def validate_compact_partition(
                 source=source,
                 symbol=symbol,
             ) from exc
-        schema_version = metadata["schema_version"]
+        schema_version = metadata.get("schema_version", BBO_SCHEMA_VERSION)
         profile = (
             BBO_PROFILE if schema_version == BBO_SCHEMA_VERSION else TOP5_PROFILE
         )
@@ -438,7 +446,7 @@ def validate_compact_partition(
             sequence_all,
             base_latency_ns=int(metadata.get("base_latency_ns", "0")),
         )
-        adjustment = int(metadata["local_timestamp_adjustment_ns"])
+        adjustment = int(metadata.get("local_timestamp_adjustment_ns", "0"))
         raw_latency = local_all - exchange_all
         corrected_latency = raw_latency + adjustment
         facts = {
@@ -477,7 +485,62 @@ def validate_compact_partition(
             symbol=symbol,
         ) from exc
     finally:
-        handle.close()
+        if handle is not None:
+            handle.close()
+
+
+def validate_compact_partition(
+    path: Path,
+    *,
+    expected_depth_levels: int | None = None,
+    trade_date: str | None = None,
+    source: str | None = None,
+    symbol: str | None = None,
+    require_identity_metadata: bool = False,
+) -> PartitionValidation:
+    """Validate one Arrow file batch-by-batch and return exact manifest facts.
+
+    Depth columns are converted one record batch at a time. Only the three
+    arrays required by the pre-existing timestamp/sidecar contract are retained
+    across batches.
+    """
+
+    resolved = Path(path)
+    return _validate_compact(
+        resolved,
+        path=resolved,
+        expected_depth_levels=expected_depth_levels,
+        trade_date=trade_date,
+        source=source,
+        symbol=symbol,
+        require_identity_metadata=require_identity_metadata,
+        require_metadata=True,
+    )
+
+
+def validate_compact_table(
+    table: pa.Table,
+    *,
+    expected_depth_levels: int | None = None,
+    trade_date: str | None = None,
+    source: str | None = None,
+    symbol: str | None = None,
+    require_identity_metadata: bool = False,
+    require_metadata: bool = True,
+    path: Path | None = None,
+) -> PartitionValidation:
+    """Validate an already-loaded table through the canonical content rules."""
+
+    return _validate_compact(
+        table,
+        path=Path("<memory>") if path is None else Path(path),
+        expected_depth_levels=expected_depth_levels,
+        trade_date=trade_date,
+        source=source,
+        symbol=symbol,
+        require_identity_metadata=require_identity_metadata,
+        require_metadata=require_metadata,
+    )
 
 
 def aggregate_depth_statistics(
@@ -515,4 +578,5 @@ __all__ = (
     "PartitionValidation",
     "aggregate_depth_statistics",
     "validate_compact_partition",
+    "validate_compact_table",
 )

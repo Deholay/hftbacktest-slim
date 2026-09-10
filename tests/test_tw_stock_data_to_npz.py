@@ -217,7 +217,7 @@ class ParquetConversionTest(unittest.TestCase):
                 self.assertEqual(int(saved["event_rows"][0]), len(converted))
                 self.assertEqual(float(saved["min_price"][0]), 77.90)
                 self.assertEqual(float(saved["max_price"][0]), 78.05)
-                self.assertEqual(int(saved["converter_version"][0]), 2)
+                self.assertEqual(int(saved["converter_version"][0]), 3)
                 self.assertEqual(int(saved["twse_trial_trading_disabled"][0]), 1)
             self.assertIsNone(event_data_semantics_issue(output, "stock"))
 

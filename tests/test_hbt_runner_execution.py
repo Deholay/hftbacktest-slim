@@ -18,12 +18,14 @@ from future_spot.arbitrage.full_market_runner import (
     balanced_backtest_shards,
     build_compact_event_data,
     build_event_data,
+    compact_reference_event_path,
     compact_asset_audit,
     ensure_spot_events,
+    hbt_manifest_payload,
     run_backtests,
 )
 from future_spot.arbitrage.models import PairConfig
-from hftbacktest_slim import BBO_SCHEMA, UnsupportedCapabilityError
+from hftbacktest_slim import BBO_SCHEMA
 
 
 def _pair(name: str) -> PairConfig:
@@ -57,19 +59,18 @@ class InlineExecutor:
 
 
 class PersistentExecutorTest(unittest.TestCase):
-    def test_full_market_topn_execution_fails_before_cache_build(self) -> None:
+    def test_full_market_topn_execution_is_dispatched_to_compact_builder(self) -> None:
         args = SimpleNamespace(
             market_data_cache="compact",
             compact_depth_levels=3,
         )
         with patch(
-            "future_spot.arbitrage.full_market_runner.build_compact_event_data"
+            "future_spot.arbitrage.full_market_runner.build_compact_event_data",
+            return_value=({}, pd.DataFrame()),
         ) as build:
-            with self.assertRaisesRegex(
-                UnsupportedCapabilityError, "cannot consume top5_v1 before Phase 4"
-            ):
-                build_event_data(args, [])
-        build.assert_not_called()
+            result = build_event_data(args, [])
+        build.assert_called_once_with(args, [])
+        self.assertEqual(result[0], {})
 
     def test_legacy_spot_npz_is_not_reused_without_trial_match_metadata(self) -> None:
         import tempfile
@@ -323,6 +324,130 @@ class PersistentExecutorTest(unittest.TestCase):
         self.assertEqual(set(paths), {record.run_key for record in records})
         self.assertIn("profile=top5_v1/depth_levels=3", str(paths[records[0].run_key]["spot"]))
         self.assertEqual(audit["compact_build_invocation_scan_count"].tolist(), [2, 2])
+        self.assertEqual(audit["compact_profile"].tolist(), ["top5", "top5"])
+        self.assertEqual(audit["compact_schema_version"].tolist(), ["top5_v1", "top5_v1"])
+        self.assertEqual(audit["compact_depth_levels"].tolist(), [3, 3])
+        self.assertEqual(audit["compact_identity_sha256"].tolist(), ["identity", "identity"])
+
+    def test_reference_topn_uses_namespaced_npz_and_exact_adapter_identity(self) -> None:
+        record = DailyPairRecord(
+            "2026-07-10", "2026-07-10::a", _pair("a"), Path("a.json")
+        )
+        args = SimpleNamespace(
+            stock_tick_parquet_template="/data/stock_{date_nodash}.parquet",
+            event_futures_parquet_dir=Path("/data/futures"),
+            session_start="09:00:00",
+            session_end="13:25:00",
+            compact_cache_root=Path("/cache"),
+            compact_cache_compression="lz4",
+            compact_cache_profile="top5",
+            compact_depth_levels=3,
+            compact_cache_batch_rows=1024,
+            compact_cache_max_gb=1.0,
+            compact_cache_min_free_gb=0.0,
+            rebuild_compact_cache=False,
+            rebuild_event_data=False,
+            continue_on_error=False,
+            engine="reference",
+            npz_compression="uncompressed",
+        )
+        symbols = {
+            "stock": {"Sa": {"status": "valid", "file": "Sa.arrow"}},
+            "stock_future": {"Fa": {"status": "valid", "file": "Fa.arrow"}},
+        }
+        manifest = {
+            "cache_state": "hit",
+            "identity_sha256": "identity",
+            "build_invocation_scan_count": 0,
+            "schema_version": "top5_v1",
+            "sources": {kind: {"symbols": values} for kind, values in symbols.items()},
+        }
+        with patch(
+            "future_spot.arbitrage.full_market_runner.CompactCacheStore.build_date",
+            return_value=manifest,
+        ), patch(
+            "future_spot.arbitrage.full_market_runner.reference_npz_is_reusable",
+            return_value=False,
+        ) as reuse, patch(
+            "future_spot.arbitrage.full_market_runner.CompactCacheStore.read_symbol",
+            return_value=pa.table({}),
+        ), patch(
+            "future_spot.arbitrage.full_market_runner.write_reference_npz_from_compact"
+        ) as write:
+            paths, audit = build_compact_event_data(args, [record])
+
+        expected_spot = compact_reference_event_path(
+            depth_levels=3,
+            trade_date="2026-07-10",
+            source="stock",
+            symbol="Sa",
+        )
+        self.assertEqual(paths[record.run_key]["spot"], expected_spot)
+        self.assertIn("profile=top5_v1/depth_levels=3", str(expected_spot))
+        self.assertEqual(write.call_count, 2)
+        self.assertEqual(reuse.call_count, 2)
+        self.assertEqual(reuse.call_args.kwargs["compact_profile"], "top5")
+        self.assertEqual(reuse.call_args.kwargs["depth_levels"], 3)
+        self.assertEqual(audit.loc[0, "compact_reference_adapter_version"], 3)
+
+    def test_reference_npz_depth_namespaces_coexist(self) -> None:
+        paths = {
+            depth: compact_reference_event_path(
+                depth_levels=depth,
+                trade_date="2026-03-02",
+                source="stock",
+                symbol="0050",
+            )
+            for depth in (2, 3, 5)
+        }
+        self.assertEqual(len(set(paths.values())), 3)
+        for depth, path in paths.items():
+            self.assertIn(f"depth_levels={depth}", str(path))
+
+    def test_backtest_manifest_distinguishes_depth_and_records_slim_versions(self) -> None:
+        import json
+        import tempfile
+
+        record = DailyPairRecord(
+            "2026-03-02", "2026-03-02::a", _pair("a"), Path("a.json")
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "cache"
+            for depth, checksum in ((2, "depth-two"), (3, "depth-three")):
+                manifest_dir = (
+                    root
+                    / "profile=top5_v1"
+                    / f"depth_levels={depth}"
+                    / "date=20260302"
+                )
+                manifest_dir.mkdir(parents=True)
+                (manifest_dir / "manifest.json").write_text(
+                    json.dumps({"identity_sha256": checksum}), encoding="utf-8"
+                )
+
+            def args(depth: int) -> SimpleNamespace:
+                return SimpleNamespace(
+                    market_data_cache="compact",
+                    engine="slim",
+                    compact_depth_levels=depth,
+                    compact_cache_root=root,
+                    stock_tick_parquet_template=str(Path(tmp) / "stock-{date_nodash}.parquet"),
+                    event_futures_parquet_dir=Path(tmp) / "future",
+                    strategy_clock="step",
+                    step_ms=1000.0,
+                )
+
+            depth2 = hbt_manifest_payload(args(2), [record])
+            depth3 = hbt_manifest_payload(args(3), [record])
+
+        self.assertEqual(depth2["compact_profile"], "top5")
+        self.assertEqual(depth2["compact_schema_version"], "top5_v1")
+        self.assertEqual(depth2["compact_depth_levels"], 2)
+        self.assertEqual(depth2["compact_identities"][0]["identity_sha256"], "depth-two")
+        self.assertEqual(depth3["compact_identities"][0]["identity_sha256"], "depth-three")
+        self.assertNotEqual(depth2, depth3)
+        self.assertEqual(depth3["slim_package_version"], "0.8.0")
+        self.assertEqual(depth3["slim_native_abi_version"], 3)
 
     def test_run_backtests_uses_caller_owned_executor(self) -> None:
         records = [

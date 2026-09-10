@@ -7,8 +7,10 @@ compact market depth. Phase 0 and Phase 1 froze BBO behavior and introduced
 configuration, physical schema, metadata, identity, namespace, CLI, and
 resource-estimation contracts. Phase 2 populates normalized Top-N Arrow rows.
 Phase 3 adds batch-wise content validation, exact depth statistics, conservative
-manifest invalidation, and completed-plus-temporary disk preflight accounting,
-without changing replay or matching behavior.
+manifest invalidation, and completed-plus-temporary disk preflight accounting.
+Phase 4 makes those profiles consumable: slim projects normalized level 1 into
+its unchanged BBO ABI, while the reference adapter reconstructs every selected
+level as HftBacktest depth events.
 
 The one user-facing selector is `depth_levels`, exposed on the command line as
 `--compact-depth-levels`. It accepts only Python integers from 1 through 5;
@@ -149,11 +151,33 @@ The slim engine remains an immediate, crossing, no-partial-fill BBO matcher.
 native `BboRow`/`BboView`, the C ABI, queue behavior, displayed-size behavior,
 or futures/spot strategy decisions. Phase 2 removes the package cache-build
 guard and supports streaming `top5_v1` publication and profile-aware
-`read_symbol()` tables. Full-market execution fails before cache construction
-for `depth_levels>1` because its engine readers remain BBO-only.
+`read_symbol()` tables.
 
-Phase 3 is the final implemented phase in this change. Later phases must
-separately implement multi-level reference-HBT reconstruction, runtime readers,
-and any future depth-sensitive execution mode. Native engine or matching
-changes require a separate semantic version, ABI review where layouts change,
-regression baseline, and parity gate.
+## Phase 4 runtime and reference integration
+
+`read_rows()` accepts `bbo_v2` and validated `top5_v1` partitions. Top-N maps
+level 1 into the unchanged native-row fields; levels 2–5 remain preserved in
+Arrow. The native row layout, ABI, `DepthView`, matcher, order priority,
+latency, no-partial-fill behavior, and no-displayed-size-cap semantics do not
+change.
+
+The reference adapter validates the same compact contract and maps enabled
+`bid_px_K`/`bid_qty_K` and `ask_px_K`/`ask_qty_K` fields into the established
+converter at `levels=N`. The compact builder already applies source quantity
+scaling, so Top-N reconstruction requires an effective scale of `1.0` and
+rejects double scaling. Reference NPZ sidecars record adapter, compact
+schema/profile/depth/checksum, conversion policy, compression, event count, and
+NPZ checksum; N=2, N=3, and N=5 use separate namespaces.
+
+Reference converter version 3 also makes a raw full-Top-5 frame with
+`levels=N` normalize all available input levels before emitting the selected N,
+so raw conversion and compact reconstruction share the same distinct-price
+semantics. Existing event NPZ archives rebuild conservatively.
+
+Full-market compact execution now accepts depth 1 through 5. Reference uses
+the matching N-level NPZ; slim receives Arrow directly and still consumes only
+level 1. Settings, conversion audit, daily manifests, and result fingerprints
+record profile/schema/depth/checksum plus applicable adapter/package/ABI
+versions. A future native depth-sensitive phase still requires a separate
+matching design, ABI review where layouts change, semantic baseline, and parity
+gate.
