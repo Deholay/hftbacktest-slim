@@ -30,6 +30,16 @@ book marker for the same interval and suppresses inferred trades. This is a
 versioned semantic change with a distinct result baseline; legacy compact
 caches and stock event NPZ files are not reusable.
 
+Equal-timestamp sequence extension (2026-09-15): package `0.6.0`, Rust
+crate/engine `0.5.0`, and native ABI `4` add an explicit slim-only `sequence`
+ordering mode. HBT-compatible ordering remains the default. In sequence mode,
+compact market rows use `(timestamp, asset_no, source_seq)` order; a request is
+anchored after the locally observed source row and before later rows with the
+same timestamp. Responses are returned without draining later equal-timestamp
+rows first. The selected ordering is result-defining and is recorded in the
+run manifest. Compact schema `bbo_v2` and builder version `3` are unchanged, so
+validated compact caches remain reusable across these result baselines.
+
 For package location, code ownership, public API, and dependency direction,
 this document supersedes older extraction locations in
 `HBT_ACCELERATION_STRATEGY.md`. That strategy document and `AGENTS.md` remain

@@ -1,4 +1,4 @@
-"""ctypes declarations and instance-owned calls for native ABI version 3."""
+"""ctypes declarations and instance-owned calls for native ABI version 4."""
 
 from __future__ import annotations
 
@@ -9,10 +9,11 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from ..config import AssetConfig
+from ..enums import EqualTimestampOrdering
 from ..errors import AbiMismatchError, NativeLibraryError, NativeLibraryNotFoundError
 
 
-NATIVE_ABI_VERSION = 3
+NATIVE_ABI_VERSION = 4
 LIBRARY_ENVIRONMENT_VARIABLE = "HFTBACKTEST_SLIM_LIBRARY"
 
 
@@ -179,6 +180,7 @@ class NativeBinding:
             ctypes.c_int64,
             ctypes.c_int64,
             ctypes.c_double,
+            ctypes.c_int32,
         ]
         library.hbt_slim_create.restype = pointer
         library.hbt_slim_free.argtypes = [pointer]
@@ -240,6 +242,7 @@ class NativeBinding:
         rows: Sequence[Any],
         adjustments_ns: Sequence[int],
         assets: Sequence[AssetConfig],
+        equal_timestamp_ordering: EqualTimestampOrdering,
     ) -> int | None:
         params: list[Any] = []
         for row_array, adjustment, asset in zip(rows, adjustments_ns, assets):
@@ -254,6 +257,7 @@ class NativeBinding:
                     asset.tick_size,
                 ]
             )
+        params.append(int(equal_timestamp_ordering))
         return self.library.hbt_slim_create(*params)
 
     def free(self, handle: int) -> None:

@@ -25,12 +25,16 @@ class SlimExecutionAdapter:
         *,
         spot_tick_size: float,
         future_tick_size: float,
+        equal_timestamp_ordering: str = "hbt",
     ) -> tuple["SlimExecutionAdapter", dict[str, float]]:
         assets = (
             cls.asset_config(spot, spot_tick_size),
             cls.asset_config(future, future_tick_size),
         )
-        adapter = cls(SlimEngine(assets), (spot_tick_size, future_tick_size))
+        adapter = cls(
+            SlimEngine(assets, equal_timestamp_ordering=equal_timestamp_ordering),
+            (spot_tick_size, future_tick_size),
+        )
         return adapter, {
             "spot_tick_size": spot_tick_size,
             "future_tick_size": future_tick_size,

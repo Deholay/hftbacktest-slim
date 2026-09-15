@@ -13,6 +13,7 @@ from hftbacktest_slim import (
     ArrowDataError,
     AssetConfig,
     DepthView,
+    EqualTimestampOrdering,
     EngineClosedError,
     FeedLatency,
     NativeCallError,
@@ -46,6 +47,7 @@ EXPECTED_PUBLIC_EXPORTS = {
     "CompactCacheStore",
     "CompactSource",
     "DepthView",
+    "EqualTimestampOrdering",
     "EngineClosedError",
     "FeedLatency",
     "NativeCallError",
@@ -79,11 +81,15 @@ def test_public_exports_are_the_implemented_neutral_runtime() -> None:
 def test_package_version_matches_project_metadata() -> None:
     project_root = Path(__file__).resolve().parents[1]
     metadata = tomllib.loads((project_root / "pyproject.toml").read_text(encoding="utf-8"))
-    assert hftbacktest_slim.__version__ == "0.5.0"
+    assert hftbacktest_slim.__version__ == "0.6.0"
     assert metadata["project"]["version"] == hftbacktest_slim.__version__
 
 
 def test_enum_integer_values_match_the_current_native_abi() -> None:
+    assert set(EqualTimestampOrdering) == {
+        EqualTimestampOrdering.HBT,
+        EqualTimestampOrdering.SEQUENCE,
+    }
     assert set(TimeInForce) == {TimeInForce.FOK, TimeInForce.IOC}
     assert set(OrderStatus) == {
         OrderStatus.NEW,
@@ -98,6 +104,8 @@ def test_enum_integer_values_match_the_current_native_abi() -> None:
     assert int(OrderStatus.EXPIRED) == 2
     assert int(OrderStatus.FILLED) == 3
     assert int(OrderType.LIMIT) == 0
+    assert int(EqualTimestampOrdering.HBT) == 0
+    assert int(EqualTimestampOrdering.SEQUENCE) == 1
 
 
 def test_asset_config_is_immutable_and_normalizes_path_like_values(tmp_path: Path) -> None:
@@ -165,5 +173,5 @@ def test_exception_hierarchy() -> None:
     assert issubclass(OrderSubmissionError, NativeCallError)
 
 
-def test_engine_implementation_version_identifies_next_feed_clock() -> None:
-    assert SLIM_ENGINE_VERSION == "rust-0.4.0"
+def test_engine_implementation_version_identifies_sequence_tie_mode() -> None:
+    assert SLIM_ENGINE_VERSION == "rust-0.5.0"

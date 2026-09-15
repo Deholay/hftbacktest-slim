@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import AssetConfig
-from ..enums import OrderStatus, Side, TimeInForce
+from ..enums import EqualTimestampOrdering, OrderStatus, Side, TimeInForce
 from ..errors import EngineClosedError, NativeCallError, OrderSubmissionError
 from ..models import DepthView, FeedLatency, OrderLatency, OrderView
 from .binding import NativeBinding
@@ -39,9 +39,12 @@ class SlimEngine:
         self,
         assets: Sequence[AssetConfig],
         library_path: str | PathLike[str] | Path | None = None,
+        *,
+        equal_timestamp_ordering: EqualTimestampOrdering | int | str = EqualTimestampOrdering.HBT,
     ) -> None:
         left, right = validate_assets(assets)
         self._assets = (left, right)
+        self.equal_timestamp_ordering = _equal_timestamp_ordering(equal_timestamp_ordering)
         self._binding = NativeBinding(library_path)
         self.library_path = self._binding.path
         self._handle: int | None = None
@@ -55,9 +58,14 @@ class SlimEngine:
         adjustments = [
             partition.local_timestamp_adjustment_ns for partition in loaded
         ]
-        # Keep every NumPy array live through hbt_slim_create. ABI v2 copies
+        # Keep every NumPy array live through hbt_slim_create. The native ABI copies
         # the rows before returning, so they can be released afterward.
-        handle = self._binding.create(row_arrays, adjustments, self._assets)
+        handle = self._binding.create(
+            row_arrays,
+            adjustments,
+            self._assets,
+            self.equal_timestamp_ordering,
+        )
         if not handle:
             raise NativeCallError(
                 f"failed to construct slim native engine with {self.library_path}"
@@ -69,10 +77,16 @@ class SlimEngine:
         cls,
         assets: Sequence[AssetConfig],
         library_path: str | PathLike[str] | Path | None = None,
+        *,
+        equal_timestamp_ordering: EqualTimestampOrdering | int | str = EqualTimestampOrdering.HBT,
     ) -> "SlimEngine":
         """Open an engine; equivalent to direct construction."""
 
-        return cls(assets, library_path=library_path)
+        return cls(
+            assets,
+            library_path=library_path,
+            equal_timestamp_ordering=equal_timestamp_ordering,
+        )
 
     def _open_handle(self) -> int:
         if self._handle is None:
@@ -284,3 +298,21 @@ class SlimEngine:
 
 
 __all__ = ("SlimEngine",)
+
+
+def _equal_timestamp_ordering(
+    value: EqualTimestampOrdering | int | str,
+) -> EqualTimestampOrdering:
+    if isinstance(value, str):
+        try:
+            return EqualTimestampOrdering[value.strip().upper()]
+        except KeyError as exc:
+            raise ValueError(
+                "equal_timestamp_ordering must be 'hbt' or 'sequence'"
+            ) from exc
+    try:
+        return EqualTimestampOrdering(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "equal_timestamp_ordering must be 'hbt' or 'sequence'"
+        ) from exc

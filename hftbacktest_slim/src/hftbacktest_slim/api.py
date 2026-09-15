@@ -1,7 +1,7 @@
 """Definition of the supported neutral root-package API."""
 
 from .config import AssetConfig
-from .enums import OrderStatus, OrderType, Side, TimeInForce
+from .enums import EqualTimestampOrdering, OrderStatus, OrderType, Side, TimeInForce
 from .errors import (
     AbiMismatchError,
     ArrowDataError,
@@ -27,6 +27,7 @@ __all__ = (
     "CompactCacheBudgetError",
     "CompactCacheError",
     "DepthView",
+    "EqualTimestampOrdering",
     "EngineClosedError",
     "FeedLatency",
     "NativeCallError",

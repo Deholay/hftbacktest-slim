@@ -77,6 +77,7 @@ class FastPipelineTest(unittest.TestCase):
         self.assertEqual(args.min_stock_volume, 1_000_000)
         self.assertEqual(args.record_market_every_steps, 60)
         self.assertEqual(args.strategy_clock, "step")
+        self.assertEqual(args.equal_timestamp_ordering, "hbt")
         self.assertEqual(args.strategy_engine, "numba")
         self.assertEqual(args.spot_input_csv_template, "")
         self.assertEqual(args.data_platform_base, "/mnt/z/數據平台")
@@ -116,6 +117,15 @@ class FastPipelineTest(unittest.TestCase):
             strategy_clock_manifest(step_args),
             {"kind": "step_ms", "step_ms": 250.0},
         )
+
+    def test_sequence_equal_timestamp_ordering_requires_slim(self) -> None:
+        with self.assertRaises(SystemExit):
+            parse_args(["--equal-timestamp-ordering", "sequence"])
+
+        args = parse_args(
+            ["--engine", "slim", "--equal-timestamp-ordering", "sequence"]
+        )
+        self.assertEqual(args.equal_timestamp_ordering, "sequence")
 
     def test_full_report_requires_explicit_positive_row_budget(self) -> None:
         with self.assertRaises(SystemExit):

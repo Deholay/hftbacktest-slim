@@ -31,4 +31,17 @@ class OrderType(IntEnum):
     LIMIT = 0
 
 
-__all__ = ("OrderStatus", "OrderType", "Side", "TimeInForce")
+class EqualTimestampOrdering(IntEnum):
+    """Tie ordering used when market data and an order share one timestamp."""
+
+    HBT = 0
+    SEQUENCE = 1
+
+
+__all__ = (
+    "EqualTimestampOrdering",
+    "OrderStatus",
+    "OrderType",
+    "Side",
+    "TimeInForce",
+)

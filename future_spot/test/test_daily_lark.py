@@ -65,6 +65,9 @@ def test_build_backtest_command_enforces_notebook_profile_date_and_output(tmp_pa
     assert command[command.index("--market-data-cache") + 1] == "compact"
     assert command[command.index("--report-mode") + 1] == "daily"
     assert command[command.index("--strategy-clock") + 1] == "event"
+    assert command[command.index("--equal-timestamp-ordering") + 1] == "sequence"
+    assert command[command.index("--future-feed-latency-offset-ms") + 1] == "0"
+    assert command[command.index("--spot-feed-latency-offset-ms") + 1] == "0"
     assert command[command.index("--post-first-feed-wait") + 1] == "none"
     assert command[command.index("--min-entry-interval-sec") + 1] == "0.001"
     assert "--post-first-feed-poll-ms" not in command
@@ -98,6 +101,8 @@ def test_success_message_keeps_run_key_and_readable_time_without_raw_ticks() -> 
     assert "1788829202263735000" not in message
     assert "1788829202263000000" not in message
     assert "Z:\\hftbacktest_daily_reports\\20260908\\daily_backtest_summary.csv" in message
+    assert "現貨 bid/ask=312.00/313.00" in message
+    assert "期貨 bid/ask=315.00/320.00" in message
 
 
 def test_read_daily_summary_rejects_an_old_schema(tmp_path: Path) -> None:

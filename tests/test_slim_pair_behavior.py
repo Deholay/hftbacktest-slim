@@ -374,6 +374,45 @@ def test_event_clock_captures_transient_feed_signal_missed_by_step_clock(
     assert event_backtester.python_decisions == 2
 
 
+def test_sequence_ordering_executes_before_later_row_with_same_timestamp(
+    tmp_path: Path,
+) -> None:
+    spot_rows = [
+        (0, 100, 100, 99.0, 100.0, 10.0, 10.0, 100.0, 1),
+    ]
+    future_rows = [
+        (10, 100, 100, 110.0, 111.0, 2.0, 2.0, 110.0, 1),
+        (20, 100, 100, 100.0, 101.0, 1.0, 1.0, 100.0, 3),
+    ]
+    pair = _pair(entry_threshold_pct=0.01)
+
+    _, hbt_trades, _ = _run(
+        tmp_path,
+        spot_rows,
+        future_rows,
+        pair=pair,
+        strategy_clock="event",
+        equal_timestamp_ordering="hbt",
+        max_steps=10,
+        max_trades=1,
+    )
+    _, sequence_trades, sequence_summary = _run(
+        tmp_path,
+        spot_rows,
+        future_rows,
+        pair=pair,
+        strategy_clock="event",
+        equal_timestamp_ordering="sequence",
+        max_steps=10,
+        max_trades=1,
+    )
+
+    assert hbt_trades.loc[0, "status"] == "FIRST_LEG_UNFILLED"
+    assert sequence_trades.loc[0, "status"] == "FILLED"
+    assert sequence_trades.loc[0, "first_exec_price"] == 110.0
+    assert sequence_summary.loc[0, "equal_timestamp_ordering"] == "sequence"
+
+
 def test_event_clock_rejects_reference_execution_before_engine_construction(
     tmp_path: Path,
 ) -> None:

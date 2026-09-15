@@ -6,6 +6,7 @@ import argparse
 import base64
 import csv
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 import hashlib
 import hmac
 import json
@@ -36,6 +37,8 @@ DAILY_LARK_BACKTEST_ARGS = (
     "slim",
     "--strategy-clock",
     "event",
+    "--equal-timestamp-ordering",
+    "sequence",
     "--market-data-cache",
     "compact",
     "--compact-cache-root",
@@ -55,13 +58,13 @@ DAILY_LARK_BACKTEST_ARGS = (
     "--future-response-latency-ms",
     "0",
     "--future-feed-latency-offset-ms",
-    "1",
+    "0",
     "--spot-order-latency-ms",
     "0",
     "--spot-response-latency-ms",
     "0",
     "--spot-feed-latency-offset-ms",
-    "30",
+    "0",
     "--post-first-feed-wait",
     "none",
     "--min-entry-interval-sec",
@@ -228,6 +231,19 @@ def windows_display_path(path: Path) -> str:
     return str(resolved)
 
 
+def _format_notification_number(value: object) -> str:
+    text = "" if value is None else str(value).strip()
+    if not text:
+        return ""
+    try:
+        number = Decimal(text)
+    except InvalidOperation:
+        return text
+    if not number.is_finite():
+        return text
+    return f"{number:.2f}"
+
+
 def format_success_message(
     trade_date: str,
     rows: Sequence[Mapping[str, str]],
@@ -255,10 +271,10 @@ def format_success_message(
                 run_key=row.get("run_key", ""),
                 time=row.get("timestamp_tw", ""),
                 signal=row.get("signal", ""),
-                spot_bid=row.get("spot_bid", ""),
-                spot_ask=row.get("spot_ask", ""),
-                future_bid=row.get("future_bid", ""),
-                future_ask=row.get("future_ask", ""),
+                spot_bid=_format_notification_number(row.get("spot_bid", "")),
+                spot_ask=_format_notification_number(row.get("spot_ask", "")),
+                future_bid=_format_notification_number(row.get("future_bid", "")),
+                future_ask=_format_notification_number(row.get("future_ask", "")),
             )
         )
     omitted = len(rows) - max_rows

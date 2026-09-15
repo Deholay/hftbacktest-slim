@@ -461,6 +461,7 @@ class HbtPairBacktester:
                 self.config.future,
                 spot_tick_size=spot_tick,
                 future_tick_size=future_tick,
+                equal_timestamp_ordering=self.config.equal_timestamp_ordering,
             )
             return adapter
         if execution_engine != "reference":
@@ -1145,6 +1146,7 @@ class HbtPairBacktester:
             "spot_feed_latency_offset_ns": self.config.spot.feed_latency_offset_ns,
             "future_feed_latency_offset_ns": self.config.future.feed_latency_offset_ns,
             "strategy_engine": self.config.strategy_engine,
+            "equal_timestamp_ordering": self.config.equal_timestamp_ordering,
             "scan_calls": self.scan_calls,
             "python_decisions": self.python_decisions,
         }

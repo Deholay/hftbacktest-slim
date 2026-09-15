@@ -1,12 +1,12 @@
 # hftbacktest-slim
 
 `hftbacktest-slim` is the project-owned, strategy-neutral compact-BBO data and
-replay runtime. Version `0.5.0` extends the stable Phase 6 public boundary: the canonical
+replay runtime. Version `0.6.0` extends the stable Phase 6 public boundary: the canonical
 schema/native dtype, Top-5 normalization, timestamp ordering, audit, streaming
 cache builder, manifest validation, sidecars, resource controls, publication,
 reader, compact CLIs, and neutral engine API live in this standalone package,
 and `future_spot` now consumes that API through strategy-owned adapters. The native crate
-is version `0.4.0`, engine identity is `rust-0.4.0`, and C ABI version is `3`.
+is version `0.5.0`, engine identity is `rust-0.5.0`, and C ABI version is `4`.
 
 The supported profile is deliberately constrained:
 
@@ -14,7 +14,8 @@ The supported profile is deliberately constrained:
 - an explicit caller-controlled strategy clock;
 - immediate crossing FOK or IOC limit orders;
 - no partial fills and no displayed-size cap;
-- independent feed, order-entry, and order-response latency; and
+- independent feed, order-entry, and order-response latency;
+- explicit HBT-compatible or source-sequence equal-timestamp ordering; and
 - no passive queue, cancel/modify, market-order, or arbitrary depth behavior.
 
 ## Neutral API
@@ -22,7 +23,13 @@ The supported profile is deliberately constrained:
 Only root-package imports are the primary runtime contract:
 
 ```python
-from hftbacktest_slim import AssetConfig, Side, SlimEngine, TimeInForce
+from hftbacktest_slim import (
+    AssetConfig,
+    EqualTimestampOrdering,
+    Side,
+    SlimEngine,
+    TimeInForce,
+)
 
 left = AssetConfig(
     symbol="0050",
@@ -37,7 +44,10 @@ right = AssetConfig(
     tick_size=1.0,
 )
 
-with SlimEngine([left, right]) as engine:
+with SlimEngine(
+    [left, right],
+    equal_timestamp_ordering=EqualTimestampOrdering.HBT,
+) as engine:
     if engine.advance(1_000_000_000):
         depth = engine.depth(0)
         engine.submit_order(
@@ -158,7 +168,7 @@ The library is resolved deterministically without a system-basename search:
 
 The library is loaded only when an engine is constructed. Importing
 `hftbacktest_slim` does not load the shared object. `engine.library_path`
-records the resolved diagnostic path. ABI values other than `3` raise
+records the resolved diagnostic path. ABI values other than `4` raise
 `AbiMismatchError` before engine construction.
 
 Build the development artifact from the repository root:
@@ -192,9 +202,11 @@ Strategy pricing, execution policy, carry, capital, and reporting remain
 outside this package.
 
 The final result implementation fingerprint selection intentionally invalidates
-older result manifests. Version `0.5.0` also invalidates compact-cache identity
+older result manifests. Version `0.5.0` also invalidated compact-cache identity
 because schema `bbo_v2`, builder version `3`, and trial-match trading semantics
-changed.
+changed. Version `0.6.0` adds the explicit `sequence` equal-timestamp execution
+mode without changing the compact schema or builder, so validated `bbo_v2`
+caches remain reusable; result manifests remain separate by ordering mode.
 Full-date, complete-month, and multi-date carry parity are recorded in
 `PHASE0_INVENTORY.md`; Phase 6 makes no performance claim.
 

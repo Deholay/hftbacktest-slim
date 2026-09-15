@@ -3,6 +3,8 @@ pub const STATUS_EXPIRED: i32 = 2;
 pub const STATUS_FILLED: i32 = 3;
 pub const TIF_FOK: i32 = 2;
 pub const TIF_IOC: i32 = 3;
+pub const EQUAL_TIMESTAMP_HBT: i32 = 0;
+pub const EQUAL_TIMESTAMP_SEQUENCE: i32 = 1;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]

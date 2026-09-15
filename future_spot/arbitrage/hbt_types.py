@@ -27,3 +27,4 @@ class HbtPairBacktestConfig:
     record_market_every_steps: int | None = None
     strategy_engine: str = "python"
     execution_engine: str = "reference"
+    equal_timestamp_ordering: str = "hbt"

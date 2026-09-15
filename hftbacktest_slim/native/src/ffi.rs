@@ -1,11 +1,13 @@
 use std::slice;
 
 use crate::engine::SlimEngine;
-use crate::types::{AssetConfig, BboRow, BboView, OrderView};
+use crate::types::{
+    AssetConfig, BboRow, BboView, EQUAL_TIMESTAMP_HBT, EQUAL_TIMESTAMP_SEQUENCE, OrderView,
+};
 
 #[unsafe(no_mangle)]
 pub extern "C" fn hbt_slim_version() -> u32 {
-    3
+    4
 }
 
 #[unsafe(no_mangle)]
@@ -29,8 +31,15 @@ pub unsafe extern "C" fn hbt_slim_create(
     entry1: i64,
     response1: i64,
     tick1: f64,
+    equal_timestamp_ordering: i32,
 ) -> *mut SlimEngine {
-    if (rows0.is_null() && len0 != 0) || (rows1.is_null() && len1 != 0) {
+    if (rows0.is_null() && len0 != 0)
+        || (rows1.is_null() && len1 != 0)
+        || !matches!(
+            equal_timestamp_ordering,
+            EQUAL_TIMESTAMP_HBT | EQUAL_TIMESTAMP_SEQUENCE
+        )
+    {
         return std::ptr::null_mut();
     }
     let left = if len0 == 0 {
@@ -61,6 +70,7 @@ pub unsafe extern "C" fn hbt_slim_create(
                 tick_size: tick1,
             },
         ],
+        equal_timestamp_ordering,
     );
     Box::into_raw(Box::new(engine))
 }

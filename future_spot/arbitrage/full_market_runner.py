@@ -333,6 +333,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "BBO feed event (slim engine only)."
         ),
     )
+    parser.add_argument(
+        "--equal-timestamp-ordering",
+        choices=("hbt", "sequence"),
+        default="hbt",
+        help=(
+            "Slim tie semantics: hbt drains event kinds by HBT priority; sequence "
+            "matches a zero-latency order after the observed source sequence and "
+            "before later rows at the same timestamp."
+        ),
+    )
     parser.add_argument("--step-ms", type=float, default=1000.0)
     parser.add_argument(
         "--strategy-engine",
@@ -474,6 +484,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.market_data_cache = "compact"
     if args.strategy_clock == "event" and args.engine != "slim":
         parser.error("--strategy-clock event requires --engine slim")
+    if args.equal_timestamp_ordering == "sequence" and args.engine != "slim":
+        parser.error("--equal-timestamp-ordering sequence requires --engine slim")
     if args.min_entry_interval_sec is not None and args.min_entry_interval_sec < 0:
         parser.error("--min-entry-interval-sec must be non-negative")
     if args.report_mode == "full" and (
@@ -1151,6 +1163,9 @@ def run_backtests_with_position_carry(
                         else None
                     ),
                     "strategy_clock": strategy_clock_manifest(args),
+                    "equal_timestamp_ordering": getattr(
+                        args, "equal_timestamp_ordering", "hbt"
+                    ),
                     "time_in_force_semantics": HBT_TIME_IN_FORCE_SEMANTICS,
                 },
                 replace_existing=bool(getattr(args, "rebuild_hbt_results", False)),
@@ -2428,7 +2443,7 @@ def hbt_result_csvs_exist(output_dir: Path) -> bool:
     return all(paths[name].exists() for name in required)
 
 
-HBT_CACHE_SCHEMA_VERSION = 10
+HBT_CACHE_SCHEMA_VERSION = 11
 HBT_MANIFEST_NAME = "backtest_manifest.json"
 REFERENCE_ENGINE_VERSION = "reference-v1"
 HBT_RESULT_ARG_NAMES = (
@@ -2450,6 +2465,7 @@ HBT_RESULT_ARG_NAMES = (
     "compact_cache_profile",
     "first_leg",
     "strategy_clock",
+    "equal_timestamp_ordering",
     "step_ms",
     "strategy_engine",
     "order_latency_ms",
@@ -2626,6 +2642,7 @@ def hbt_manifest_payload(args: argparse.Namespace, records: list[DailyPairRecord
         ),
         "daily_result_schema_version": DAILY_RESULT_SCHEMA_VERSION,
         "strategy_clock": strategy_clock_manifest(args),
+        "equal_timestamp_ordering": getattr(args, "equal_timestamp_ordering", "hbt"),
         "time_in_force_semantics": HBT_TIME_IN_FORCE_SEMANTICS,
         "arguments": arguments,
         "run_keys": [record.run_key for record in records],
@@ -2830,6 +2847,7 @@ def build_pair_hbt_config(
             else getattr(args, "strategy_engine", "numba")
         ),
         execution_engine=getattr(args, "engine", "reference"),
+        equal_timestamp_ordering=getattr(args, "equal_timestamp_ordering", "hbt"),
     )
 
 

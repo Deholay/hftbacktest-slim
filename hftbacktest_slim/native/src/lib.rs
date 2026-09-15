@@ -14,5 +14,6 @@ pub use ffi::{
     hbt_slim_submit, hbt_slim_version, hbt_slim_wait_order_response,
 };
 pub use types::{
-    BboRow, BboView, OrderView, STATUS_EXPIRED, STATUS_FILLED, STATUS_NEW, TIF_FOK, TIF_IOC,
+    BboRow, BboView, EQUAL_TIMESTAMP_HBT, EQUAL_TIMESTAMP_SEQUENCE, OrderView, STATUS_EXPIRED,
+    STATUS_FILLED, STATUS_NEW, TIF_FOK, TIF_IOC,
 };

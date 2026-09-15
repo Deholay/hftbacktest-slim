@@ -82,7 +82,12 @@ Benchmark sources:
   different `step_ms`.
 - Preserve independent feed, order-entry, and response latency for both legs.
 - Preserve deterministic ordering for equal-timestamp local feed, local order,
-  exchange feed, and exchange order events.
+  exchange feed, and exchange order events. HBT-compatible ordering remains
+  the default baseline. The slim-only `sequence` baseline is explicit and
+  orders compact rows by `(timestamp, asset_no, source_seq)`, with a request
+  anchored immediately after the locally observed source row and before later
+  rows at the same timestamp. Never compare or cache the two ordering modes as
+  one semantic baseline.
 - Make configured FOK and IOC behavior real and explicit. Never silently map an
   unsupported time-in-force to GTC.
 - Keep legacy-GTC parity and intended-FOK/IOC results as separate baselines.
@@ -402,8 +407,8 @@ progress.
 
 ### Equal-timestamp priority
 
-Match HBT's current event-set priority exactly. For two assets, use the
-equivalent of:
+The default baseline matches HBT's current event-set priority exactly. For two
+assets, use the equivalent of:
 
 ```text
 (timestamp, asset_no, event_kind_priority, source_seq)
@@ -417,6 +422,25 @@ ExchOrder  = 3
 Changing tie order can change whether an order sees the old or new book. Golden
 tests must place all event kinds at the same nanosecond and compare fill status,
 price, and latency timestamps.
+
+The slim engine also supports an explicit `sequence` baseline for zero-latency
+event-clock strategies. It orders market events by:
+
+```text
+(timestamp, asset_no, source_seq, event_kind_priority, serial)
+
+LocalData  = 0
+ExchData   = 1
+LocalOrder = 2
+ExchOrder  = 3
+```
+
+An order request inherits the `source_seq` of the last locally observed row.
+Consequently, the exchange copy of that row is applied before the request, and
+later source rows with the same timestamp remain pending. Returning the order
+response does not drain those later rows. This mode, the HBT-compatible mode,
+and their results require separate manifest identities and regression
+baselines.
 
 ### Execution semantics
 
