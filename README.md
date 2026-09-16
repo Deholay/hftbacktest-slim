@@ -125,7 +125,7 @@ python3 future_spot/test/run_full_backtest.py \
 | `hftbacktest_slim/native/src/` | Rust scheduler、BBO state、latency/order state，以及立即 FOK/IOC matching core；依 types、book、scheduler、matcher、engine 與 FFI 職責分割。 |
 | `hftbacktest_slim/src/hftbacktest_slim/engine/` | Neutral `SlimEngine`、`ctypes` ABI binding、Arrow partition reader、lifecycle 與 capability validation。 |
 | `hftbacktest_slim/src/hftbacktest_slim/market_data/` | Canonical `bbo_v2` schema/aligned dtype、TWSE 緩撮交易狀態、Top-5 normalization、timestamp ordering/sidecars 與 generic compact audit。 |
-| `hftbacktest_slim/src/hftbacktest_slim/cache/` | Builder v4 one-scan cache、depth/profile manifest identity、disk budgets 與 atomic publication。 |
+| `hftbacktest_slim/src/hftbacktest_slim/cache/` | Builder v5 one-scan cache、depth/profile manifest identity、content validation、disk budgets 與 atomic publication。 |
 | `future_spot/arbitrage/execution_port.py`、`reference_execution.py`、`slim_execution.py` | Strategy-owned execution port，以及 reference／neutral slim adapters。 |
 | `future_spot/arbitrage/hbt_backtest.py` | 經由 execution port 執行共用 pair strategy 流程。 |
 | `future_spot/arbitrage/full_market_runner.py` | CLI、compact data 編排、依日期循序留倉、workers、結果持久化與 manifests。 |
@@ -137,8 +137,9 @@ Python neutral API 可由 `hftbacktest_slim` 匯入 `AssetConfig`、`SlimEngine`
 `CompactCacheStore` 與 `CompactSource`。Native library 依序採用明確的 `library_path`、
 `HFTBACKTEST_SLIM_LIBRARY`、package artifact，以及 root Cargo release artifact；
 package import 本身不會載入 shared library。預設 compact schema 為 `bbo_v2`，builder
-為 version `4`；`depth_levels=2..5` 的 `top5_v1` schema/namespace 已定義，但 Phase 1
-會在 raw scan 前拒絕實際 build。`tradable` 欄位在 TWSE `trial_status_tag=1` 時清空 BBO 並停止
+為 version `5`；`depth_levels=2..5` 使用固定 `top5_v1` schema 與獨立 namespace。
+Phase 5 已完成 deterministic parity、157-pair 單日 rollout，以及含真實留倉的兩日 restart
+驗證；量測與限制見 `docs/COMPACT_TOP_N_PHASE5_VALIDATION.md`。`tradable` 欄位在 TWSE `trial_status_tag=1` 時清空 BBO 並停止
 matching，直到下一筆可交易行情。舊 compact cache 會保守失效。`future_spot` slim path 直接使用 neutral API；
 `examples/slim_two_asset_strategy/` 以另一個獨立策略驗證相同擴充邊界。這次 integration
 source 變更與 Phase 6 source selection 會使舊 result manifests 失效，但移除舊入口
@@ -149,6 +150,10 @@ source 變更與 Phase 6 source selection 會使舊 result manifests 失效，�
 ```bash
 python3 -m hftbacktest_slim.cli.build_cache --help
 python3 -m hftbacktest_slim.cli.benchmark_read --help
+
+python3 future_spot/test/run_full_backtest.py --market-data-cache compact --compact-depth-levels 1
+python3 future_spot/test/run_full_backtest.py --market-data-cache compact --compact-depth-levels 3
+python3 future_spot/test/run_full_backtest.py --market-data-cache compact --compact-depth-levels 5
 ```
 
 Cold build 對每個日期的股票及期貨 physical source 各讀一次 projected record
@@ -157,6 +162,9 @@ batches；warm validated reuse 不讀 raw payload。預設 LZ4，亦保留 `none
 `source_rows * 1.20` 檢查容量及 free-space reserve，每個 batch 後重查；
 manifest 最後寫入並以同檔案系統 atomic rename 發布，失敗時只清理當次 incomplete
 temporary date，不會自動刪除 completed cache、raw data 或 results。
+Reference engine 會重建所選 N 個 normalized distinct levels；slim 對 `top5_v1`
+只投影 level 1 到未變更的 80-byte native BBO row。Slim 不支援 depth-sensitive
+matching、partial fills、displayed-size cap、passive/GTC/GTX 或 queue semantics。
 
 目前保留的一月至七月回測，除日期區間與資料路徑外，另使用以下會影響結果的執行與
 資金設定：

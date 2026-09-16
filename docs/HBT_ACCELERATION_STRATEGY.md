@@ -605,6 +605,20 @@ baseline.
 
 ### Phase 5: rollout and benchmarks
 
+Implementation status (2026-09-16): **the configurable compact Top-N Phase 5
+gate is complete for deterministic parity, one complete 157-pair date, and a
+bounded real two-date carry/restart run.** See
+[`COMPACT_TOP_N_PHASE5_VALIDATION.md`](COMPACT_TOP_N_PHASE5_VALIDATION.md) for
+commands, source identities, mismatch counts, cold/warm timings, RSS, disk,
+scan counts, and limitations. This is not a new month, multi-month, annual, or
+4–7x complete-run performance claim, and slim remains non-default.
+
+The gate fixed date-range contamination in daily restart identities and bumped
+only the HBT/result identity schema from 11 to 12. Compact builder 5,
+`bbo_v2`, `top5_v1`, package 0.8.0, Rust engine `rust-0.4.0`, and native ABI 3
+remain unchanged. Existing schema-11 result partitions rebuild
+conservatively.
+
 Run in this order:
 
 1. One pair and one date.

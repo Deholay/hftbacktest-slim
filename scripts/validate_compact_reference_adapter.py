@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare compact BBO reconstruction with direct canonical source conversion."""
+"""Compare compact selected-depth reconstruction with direct source conversion."""
 
 from __future__ import annotations
 
@@ -18,11 +18,9 @@ if str(WORKSPACE_ROOT) not in sys.path:
 from hftbacktest_slim import (
     CompactBuildConfig,
     CompactCacheStore,
-    normalized_bbo_from_depth_columns,
 )
 from scripts.compact_hbt_adapter import compact_to_reference_events
 from scripts.tw_stock_data_to_npz import (
-    _float_matrix,
     build_events_from_parquet_frame,
     symbol_filter_values,
 )
@@ -35,11 +33,19 @@ def main() -> int:
     parser.add_argument("--source", required=True)
     parser.add_argument("--symbol", required=True)
     parser.add_argument("--raw-file", type=Path, required=True)
+    parser.add_argument("--depth-levels", type=int, choices=range(1, 6), default=1)
+    parser.add_argument("--volume-scale", type=float, default=1.0)
+    parser.add_argument("--price-only-depth-qty", type=float)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
     store = CompactCacheStore(
-        CompactBuildConfig(cache_root=args.cache_root, max_cache_bytes=2**63 - 1, min_free_bytes=0)
+        CompactBuildConfig(
+            cache_root=args.cache_root,
+            depth_levels=args.depth_levels,
+            max_cache_bytes=2**63 - 1,
+            min_free_bytes=0,
+        )
     )
     compact = store.read_symbol(args.date, args.source, args.symbol)
     compact_events, _ = compact_to_reference_events(compact, trade_date=args.date)
@@ -51,54 +57,54 @@ def main() -> int:
         .filter(pl.col(symbol_column).cast(pl.Utf8).is_in(symbol_filter_values(args.symbol)))
         .collect()
     )
-    sort_columns = [name for name in ("exchtime", "localtime", "sequence") if name in raw.columns]
-    raw = raw.sort(sort_columns, maintain_order=True)
-    bid_px, bid_qty = normalized_bbo_from_depth_columns(
-        _float_matrix(raw, [f"bid_price{level}" for level in range(1, 6)]),
-        _float_matrix(raw, [f"bid_volume{level}" for level in range(1, 6)]),
-        1.0,
-        0.0,
-        False,
-        True,
-    )
-    ask_px, ask_qty = normalized_bbo_from_depth_columns(
-        _float_matrix(raw, [f"ask_price{level}" for level in range(1, 6)]),
-        _float_matrix(raw, [f"ask_volume{level}" for level in range(1, 6)]),
-        1.0,
-        0.0,
-        False,
-        False,
-    )
-    direct = raw.select("exchtime", "localtime", "last_price", "total_volume").with_columns(
-        pl.Series("bid_price1", bid_px),
-        pl.Series("bid_volume1", bid_qty),
-        pl.Series("ask_price1", ask_px),
-        pl.Series("ask_volume1", ask_qty),
-    )
     converter_args = argparse.Namespace(
-        levels=1,
+        levels=args.depth_levels,
         timestamp_unit="auto",
         timezone="Asia/Taipei",
         date=args.date,
         base_latency_ns=0,
-        volume_scale=1.0,
-        price_only_depth_qty=None,
+        volume_scale=args.volume_scale,
+        price_only_depth_qty=args.price_only_depth_qty,
         trade_side="infer",
         no_trades=False,
         no_depth=False,
         qa_sample_rows=1000,
+        source_kind=args.source,
     )
-    direct_events, _ = build_events_from_parquet_frame(direct, converter_args)
+    direct_events, _ = build_events_from_parquet_frame(raw, converter_args)
     equal = np.array_equal(compact_events, direct_events)
+    overlap = min(len(direct_events), len(compact_events))
+    row_mismatches = 0
+    field_mismatches: dict[str, int] = {}
+    if overlap:
+        row_different = np.zeros(overlap, dtype=bool)
+        for name in direct_events.dtype.names or ():
+            left = direct_events[name][:overlap]
+            right = compact_events[name][:overlap]
+            if left.dtype.kind == "f":
+                different = ~((left == right) | (np.isnan(left) & np.isnan(right)))
+            else:
+                different = left != right
+            count = int(np.count_nonzero(different))
+            if count:
+                field_mismatches[name] = count
+                row_different |= different
+        row_mismatches = int(np.count_nonzero(row_different))
+    event_mismatch_count = row_mismatches + abs(len(direct_events) - len(compact_events))
     payload = {
         "date": args.date,
         "source": args.source,
         "symbol": args.symbol,
+        "depth_levels": args.depth_levels,
+        "compact_profile": "bbo" if args.depth_levels == 1 else "top5",
+        "compact_schema_version": "bbo_v2" if args.depth_levels == 1 else "top5_v1",
         "source_rows": raw.height,
         "compact_rows": compact.num_rows,
         "direct_event_rows": len(direct_events),
         "compact_event_rows": len(compact_events),
         "events_equal": equal,
+        "event_mismatch_count": event_mismatch_count,
+        "field_mismatch_counts": field_mismatches,
         "direct_sha256": hashlib.sha256(direct_events.tobytes()).hexdigest(),
         "compact_sha256": hashlib.sha256(compact_events.tobytes()).hexdigest(),
     }

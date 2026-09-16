@@ -20,6 +20,8 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.ipc as ipc
 
 ARBITRAGE_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = ARBITRAGE_ROOT.parent
@@ -993,7 +995,9 @@ def run_backtests_with_position_carry(
             )
             identity_started = time.perf_counter()
             carry_in = position_carry_identity(carry)
-            input_identity = hbt_manifest_payload(args, date_records)
+            input_identity = hbt_manifest_payload(
+                args, date_records, identity_trade_date=trade_date
+            )
             if not getattr(args, "rebuild_hbt_results", False):
                 try:
                     persisted = result_store.validate(trade_date)
@@ -1094,7 +1098,9 @@ def run_backtests_with_position_carry(
             # result identity. Recompute after publication so the first run and
             # every later resume compare the same result-defining payload.
             if getattr(args, "market_data_cache", "event_npz") == "compact":
-                input_identity = hbt_manifest_payload(args, date_records)
+                input_identity = hbt_manifest_payload(
+                    args, date_records, identity_trade_date=trade_date
+                )
             timing_rows.append(
                 stage_timing_row(trade_date, "event_data", stage_started, len(date_records), "executed")
             )
@@ -1709,7 +1715,7 @@ def build_compact_event_data(
                 )
                 if not reusable:
                     write_reference_npz_from_compact(
-                        store.read_symbol(trade_date, source, str(symbol)),
+                        _read_validated_compact_partition(compact_path),
                         output,
                         trade_date=trade_date,
                         compact_identity_sha256=manifest["identity_sha256"],
@@ -1749,6 +1755,22 @@ def build_compact_event_data(
         if not ok and not args.continue_on_error:
             raise RuntimeError(f"compact data missing for {record.run_key}: {errors}")
     return paths_by_run_key, pd.DataFrame(audit_rows)
+
+
+def _read_validated_compact_partition(path: Path) -> pa.Table:
+    """Read one partition after ``build_date`` validated the complete date.
+
+    Calling ``CompactCacheStore.read_symbol`` here would revalidate every
+    partition in the date for every leg. The manifest just returned by
+    ``build_date`` already performed fail-closed date validation; the reference
+    adapter validates the selected table contract again before NPZ publication.
+    """
+
+    try:
+        with pa.memory_map(str(path), "r") as handle:
+            return ipc.open_file(handle).read_all()
+    except (OSError, pa.ArrowException) as exc:
+        raise CompactCacheError(f"failed to read validated compact partition: {path}") from exc
 
 
 def compact_reference_event_path(
@@ -2548,7 +2570,7 @@ def hbt_result_csvs_exist(output_dir: Path) -> bool:
     return all(paths[name].exists() for name in required)
 
 
-HBT_CACHE_SCHEMA_VERSION = 11
+HBT_CACHE_SCHEMA_VERSION = 12
 HBT_MANIFEST_NAME = "backtest_manifest.json"
 REFERENCE_ENGINE_VERSION = "reference-v1"
 HBT_RESULT_ARG_NAMES = (
@@ -2716,7 +2738,12 @@ def _compact_identity_manifest_rows(
     return rows
 
 
-def hbt_manifest_payload(args: argparse.Namespace, records: list[DailyPairRecord]) -> dict[str, Any]:
+def hbt_manifest_payload(
+    args: argparse.Namespace,
+    records: list[DailyPairRecord],
+    *,
+    identity_trade_date: str | None = None,
+) -> dict[str, Any]:
     config_paths = sorted({record.config_path.resolve() for record in records}, key=str)
     if getattr(args, "market_data_cache", "event_npz") == "compact":
         event_paths = sorted(
@@ -2745,6 +2772,12 @@ def hbt_manifest_payload(args: argparse.Namespace, records: list[DailyPairRecord
     arguments = {
         name: _json_value(getattr(args, name, None)) for name in HBT_RESULT_ARG_NAMES
     }
+    if identity_trade_date is not None:
+        # Daily result partitions must remain reusable as a verified contiguous
+        # prefix when the requested range is extended. Keep the global run
+        # manifest range-aware, but make a daily identity depend on its own date.
+        arguments["start_date"] = identity_trade_date
+        arguments["end_date"] = identity_trade_date
     if getattr(args, "strategy_clock", "step") == "event":
         arguments["step_ms"] = None
     return {

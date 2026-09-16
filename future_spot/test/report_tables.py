@@ -162,7 +162,10 @@ def build_report_tables(artifacts: BacktestArtifacts) -> ReportArtifacts:
 
 
 def _csv_columns(path: Path) -> list[str]:
-    return pd.read_csv(path, nrows=0).columns.tolist()
+    try:
+        return pd.read_csv(path, nrows=0).columns.tolist()
+    except pd.errors.EmptyDataError:
+        return []
 
 
 def _concat(parts: Iterable[pd.DataFrame], columns: Iterable[str] = ()) -> pd.DataFrame:
@@ -178,6 +181,9 @@ def _stream_trade_inputs(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Return FILLED rows and the minimum trade pool needed for failure reports."""
     header = _csv_columns(path)
+    if not header:
+        empty = pd.DataFrame(columns=sorted(TRADE_REPORT_COLUMNS))
+        return empty.copy(), empty.copy()
     usecols = None if include_failure_windows else [name for name in header if name in TRADE_REPORT_COLUMNS]
     filled_parts: list[pd.DataFrame] = []
     failed_parts: list[pd.DataFrame] = []
@@ -233,6 +239,9 @@ def _stream_market_inputs(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Reduce the market file to one mark per run and optional failed-run windows."""
     header = _csv_columns(path)
+    if not header:
+        empty = pd.DataFrame(columns=sorted(MARKET_LATEST_COLUMNS))
+        return empty.copy(), empty.copy()
     usecols = None if include_failure_windows else [name for name in header if name in MARKET_LATEST_COLUMNS]
     latest = pd.DataFrame(columns=usecols or header)
     failure_parts: list[pd.DataFrame] = []
@@ -252,6 +261,9 @@ def _stream_latency_tables(
     chunk_rows: int,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     header = _csv_columns(path)
+    if not header:
+        summary, counts = _latency_tables(pd.DataFrame())
+        return summary, counts, pd.DataFrame(columns=sorted(LATENCY_REPORT_COLUMNS))
     usecols = [name for name in header if name in LATENCY_REPORT_COLUMNS]
     metrics = (
         "spot_feed_latency_ns",

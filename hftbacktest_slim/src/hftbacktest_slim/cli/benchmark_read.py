@@ -15,12 +15,20 @@ import pyarrow.ipc as ipc
 
 from ..cache.config import CompactBuildConfig
 from ..cache.store import CompactCacheStore
+from ..engine.arrow_reader import read_rows
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cache-root", type=Path, required=True)
     parser.add_argument("--date", required=True)
+    parser.add_argument(
+        "--compact-depth-levels",
+        type=int,
+        choices=(1, 2, 3, 4, 5),
+        default=1,
+        help="Select the bbo_v2 or depth-specific top5_v1 cache namespace.",
+    )
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--output", type=Path)
     return parser.parse_args(argv)
@@ -30,6 +38,7 @@ def run(args: argparse.Namespace) -> dict:
     store = CompactCacheStore(
         CompactBuildConfig(
             cache_root=args.cache_root,
+            depth_levels=getattr(args, "compact_depth_levels", 1),
             max_cache_bytes=2**63 - 1,
             min_free_bytes=0,
         )
@@ -42,6 +51,7 @@ def run(args: argparse.Namespace) -> dict:
         if details.get("status") == "valid"
     ]
     runs = []
+    price_field = "bid_px" if store.config.depth_levels == 1 else "bid_px_1"
     for _ in range(args.repetitions):
         rows = 0
         checksum = 0.0
@@ -52,7 +62,7 @@ def run(args: argparse.Namespace) -> dict:
                 table = ipc.open_file(handle).read_all()
                 rows += table.num_rows
                 value = (
-                    float(table["bid_px"].chunk(0)[0].as_py() or 0.0)
+                    float(table[price_field].chunk(0)[0].as_py() or 0.0)
                     if table.num_rows
                     else 0.0
                 )
@@ -67,18 +77,57 @@ def run(args: argparse.Namespace) -> dict:
                 "checksum": checksum,
             }
         )
+    projection_runs = []
+    for _ in range(args.repetitions):
+        rows = 0
+        checksum = 0.0
+        started_wall = time.perf_counter()
+        started_cpu = time.process_time()
+        for path in files:
+            loaded = read_rows(path)
+            rows += len(loaded.rows)
+            if len(loaded.rows):
+                value = float(loaded.rows["bid_px"][0])
+                checksum += value if math.isfinite(value) else 0.0
+        wall = time.perf_counter() - started_wall
+        projection_runs.append(
+            {
+                "wall_seconds": wall,
+                "cpu_seconds": time.process_time() - started_cpu,
+                "rows": rows,
+                "rows_per_second": rows / wall,
+                "checksum": checksum,
+            }
+        )
+    peak_rss_kib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return {
         "date": args.date,
         "cache_root": str(args.cache_root.resolve()),
+        "cache_state": "warm",
+        "raw_scan_count": 0,
+        "profile": manifest["profile"],
+        "schema_version": manifest["schema_version"],
+        "depth_levels": manifest["depth_levels"],
+        "builder_version": manifest["builder_version"],
+        "compression": manifest["compression"],
         "files": len(files),
         "bytes": sum(path.stat().st_size for path in files),
-        "peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+        "rows": sum(int(item["rows"]) for item in runs[:1]),
+        "peak_rss_kib": peak_rss_kib,
+        "peak_rss_bytes": peak_rss_kib * 1024,
         "runs": runs,
+        "projection_runs": projection_runs,
         "median_wall_seconds": statistics.median(
             item["wall_seconds"] for item in runs
         ),
         "median_rows_per_second": statistics.median(
             item["rows_per_second"] for item in runs
+        ),
+        "median_projection_wall_seconds": statistics.median(
+            item["wall_seconds"] for item in projection_runs
+        ),
+        "median_projection_rows_per_second": statistics.median(
+            item["rows_per_second"] for item in projection_runs
         ),
     }
 

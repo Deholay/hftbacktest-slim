@@ -369,9 +369,9 @@ class PersistentExecutorTest(unittest.TestCase):
             "future_spot.arbitrage.full_market_runner.reference_npz_is_reusable",
             return_value=False,
         ) as reuse, patch(
-            "future_spot.arbitrage.full_market_runner.CompactCacheStore.read_symbol",
+            "future_spot.arbitrage.full_market_runner._read_validated_compact_partition",
             return_value=pa.table({}),
-        ), patch(
+        ) as read_partition, patch(
             "future_spot.arbitrage.full_market_runner.write_reference_npz_from_compact"
         ) as write:
             paths, audit = build_compact_event_data(args, [record])
@@ -385,6 +385,7 @@ class PersistentExecutorTest(unittest.TestCase):
         self.assertEqual(paths[record.run_key]["spot"], expected_spot)
         self.assertIn("profile=top5_v1/depth_levels=3", str(expected_spot))
         self.assertEqual(write.call_count, 2)
+        self.assertEqual(read_partition.call_count, 2)
         self.assertEqual(reuse.call_count, 2)
         self.assertEqual(reuse.call_args.kwargs["compact_profile"], "top5")
         self.assertEqual(reuse.call_args.kwargs["depth_levels"], 3)
@@ -448,6 +449,38 @@ class PersistentExecutorTest(unittest.TestCase):
         self.assertNotEqual(depth2, depth3)
         self.assertEqual(depth3["slim_package_version"], "0.8.0")
         self.assertEqual(depth3["slim_native_abi_version"], 3)
+
+    def test_daily_manifest_identity_is_independent_of_requested_range_end(self) -> None:
+        record = DailyPairRecord(
+            "2026-03-02", "2026-03-02::a", _pair("a"), Path("a.json")
+        )
+
+        def args(end_date: str) -> SimpleNamespace:
+            return SimpleNamespace(
+                start_date="2026-03-02",
+                end_date=end_date,
+                market_data_cache="event_npz",
+                engine="reference",
+                strategy_clock="step",
+                step_ms=1000.0,
+                event_data_dir=Path("events"),
+                session_start="09:00:00",
+                session_end="13:25:00",
+            )
+
+        first = hbt_manifest_payload(
+            args("2026-03-02"), [record], identity_trade_date=record.trade_date
+        )
+        extended = hbt_manifest_payload(
+            args("2026-03-03"), [record], identity_trade_date=record.trade_date
+        )
+        global_extended = hbt_manifest_payload(args("2026-03-03"), [record])
+
+        self.assertEqual(first, extended)
+        self.assertEqual(first["arguments"]["start_date"], "2026-03-02")
+        self.assertEqual(first["arguments"]["end_date"], "2026-03-02")
+        self.assertEqual(global_extended["arguments"]["end_date"], "2026-03-03")
+        self.assertEqual(first["schema_version"], 12)
 
     def test_run_backtests_uses_caller_owned_executor(self) -> None:
         records = [

@@ -105,7 +105,9 @@ class DailyResultPipelineTest(unittest.TestCase):
                 ),
                 patch(
                     "future_spot.arbitrage.full_market_runner.hbt_manifest_payload",
-                    side_effect=lambda _args, date_records: {"trade_date": date_records[0].trade_date},
+                    side_effect=lambda _args, date_records, **_kwargs: {
+                        "trade_date": date_records[0].trade_date
+                    },
                 ),
             )
             with common_patches[0], common_patches[1], common_patches[2], common_patches[3], patch(

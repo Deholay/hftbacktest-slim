@@ -55,6 +55,18 @@ through five, and full-market result identities record the selected profile and
 depth. This market-data profile integration does not add native depth state,
 depth-sensitive matching, partial fills, passive orders, or queue behavior.
 
+Configurable-depth Phase 5 validation (2026-09-16): package `0.8.0`, physical
+schemas `bbo_v2`/`top5_v1`, compact builder `5`, Rust engine `rust-0.4.0`, and
+native ABI `3` remain unchanged. Deterministic direct/compact reference parity
+passes at every N=1..5; slim level-1 projection parity passes at N=1/2/3/5;
+and a complete 157-pair real-data date passes exact slim N=1 versus N=3 result
+parity. A real carried position also passes expanded-range restart equality.
+The restart repair bumps only the strategy-owned HBT/result identity schema to
+12. Measured commands and limitations are in
+[`COMPACT_TOP_N_PHASE5_VALIDATION.md`](COMPACT_TOP_N_PHASE5_VALIDATION.md).
+This evidence does not change the package boundary or authorize native
+depth-sensitive matching.
+
 For package location, code ownership, public API, and dependency direction,
 this document supersedes older extraction locations in
 `HBT_ACCELERATION_STRATEGY.md`. That strategy document and `AGENTS.md` remain

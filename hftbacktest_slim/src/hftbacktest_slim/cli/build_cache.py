@@ -5,13 +5,16 @@ from __future__ import annotations
 import argparse
 import json
 import resource
+import shutil
 import time
 from pathlib import Path
 
 import pyarrow.parquet as pq
 
 from ..cache.config import CompactBuildConfig, CompactSource
+from ..cache.publication import directory_bytes, projected_build_space
 from ..cache.store import CompactCacheStore
+from ..version import NATIVE_ABI_VERSION, SLIM_ENGINE_VERSION, __version__
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -84,18 +87,62 @@ def run(args: argparse.Namespace) -> dict:
         min_free_bytes=int(args.min_free_gb * 1024**3),
         rebuild=args.rebuild,
     )
+    probe = args.cache_root if args.cache_root.exists() else args.cache_root.parent
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    cache_bytes_before = directory_bytes(args.cache_root)
+    free_bytes_before = shutil.disk_usage(probe).free
     started_wall = time.perf_counter()
     started_cpu = time.process_time()
     manifest = CompactCacheStore(config).build_date(args.date, sources)
+    wall_seconds = time.perf_counter() - started_wall
+    peak_rss_kib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    source_rows = sum(
+        int(file_identity["rows"])
+        for source in manifest["identity"]["sources"]
+        for file_identity in source["files"]
+    )
+    projected = projected_build_space(source_rows, config.depth_levels)
+    cache_bytes_after = directory_bytes(args.cache_root)
+    free_bytes_after = shutil.disk_usage(
+        args.cache_root if args.cache_root.exists() else probe
+    ).free
+    build_seconds = (
+        float(manifest["elapsed_seconds"])
+        if manifest["cache_state"] == "miss"
+        else None
+    )
     return {
         "date": args.date,
         "cache_root": str(args.cache_root.resolve()),
         "compression": args.compression,
+        "profile": manifest["profile"],
+        "schema_version": manifest["schema_version"],
         "depth_levels": config.depth_levels,
         "cache_state": manifest["cache_state"],
-        "wall_seconds": time.perf_counter() - started_wall,
+        "wall_seconds": wall_seconds,
         "cpu_seconds": time.process_time() - started_cpu,
-        "peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+        "peak_rss_kib": peak_rss_kib,
+        "peak_rss_bytes": peak_rss_kib * 1024,
+        "package_version": __version__,
+        "engine_version": SLIM_ENGINE_VERSION,
+        "native_abi_version": NATIVE_ABI_VERSION,
+        "builder_version": manifest["builder_version"],
+        "batch_rows": config.batch_rows,
+        "source_rows": source_rows,
+        "output_rows": manifest["output_rows"],
+        "raw_scan_count": manifest["build_invocation_scan_count"],
+        "build_seconds": build_seconds,
+        "validation_publication_seconds": (
+            None if build_seconds is None else max(0.0, wall_seconds - build_seconds)
+        ),
+        **projected,
+        "actual_output_bytes": manifest["output_bytes"],
+        "cache_bytes_before": cache_bytes_before,
+        "cache_bytes_after": cache_bytes_after,
+        "cache_growth_bytes": cache_bytes_after - cache_bytes_before,
+        "free_bytes_before": free_bytes_before,
+        "free_bytes_after": free_bytes_after,
         "manifest": manifest,
     }
 

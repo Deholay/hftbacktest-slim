@@ -3,14 +3,18 @@
 ## Status and scope
 
 This document defines the staged implementation of configurable symmetric
-compact market depth. Phase 0 and Phase 1 froze BBO behavior and introduced
+compact market depth. **Phases 0–5 are complete as of 2026-09-16.** Phase 0 and
+Phase 1 froze BBO behavior and introduced
 configuration, physical schema, metadata, identity, namespace, CLI, and
 resource-estimation contracts. Phase 2 populates normalized Top-N Arrow rows.
 Phase 3 adds batch-wise content validation, exact depth statistics, conservative
 manifest invalidation, and completed-plus-temporary disk preflight accounting.
 Phase 4 makes those profiles consumable: slim projects normalized level 1 into
 its unchanged BBO ABI, while the reference adapter reconstructs every selected
-level as HftBacktest depth events.
+level as HftBacktest depth events. Phase 5 validates deterministic and real-data
+parity, cache/resource behavior, full-market rollout, carry/restart, and
+benchmark evidence. The measured report is
+[`COMPACT_TOP_N_PHASE5_VALIDATION.md`](COMPACT_TOP_N_PHASE5_VALIDATION.md).
 
 The one user-facing selector is `depth_levels`, exposed on the command line as
 `--compact-depth-levels`. It accepts only Python integers from 1 through 5;
@@ -181,3 +185,25 @@ record profile/schema/depth/checksum plus applicable adapter/package/ABI
 versions. A future native depth-sensitive phase still requires a separate
 matching design, ABI review where layouts change, semantic baseline, and parity
 gate.
+
+## Phase 5 validation and release gate
+
+Phase 5 passed exact direct-reference versus compact-reference equality at
+N=1, N=2, N=3, N=4, and N=5, with zero mismatched events. Deterministic slim
+N=1/N=2/N=3/N=5 fixtures are exact, and the complete 157-pair 2026-03-02 slim
+N=1 versus N=3 comparison is exact across summary, trades, market, latency,
+carry, errors, and entry/exit tables. Real 0050 decimal prices and
+daily-versus-symbol source parity were verified.
+
+Cold benchmark builds at N=1/N=3/N=5 each performed one stock and one futures
+raw scan; validated warm reuse performed zero raw scans. N=3 and N=5 retain the
+same fixed-`top5_v1` 256-byte conservative estimate, while actual compressed
+sizes are reported separately in the measured report.
+
+Rollout found and repaired three defects: summary reporting of valid headerless
+empty compatibility CSVs, range-end contamination of daily restart identity,
+and repeated whole-date validation inside per-symbol reference reconstruction.
+The restart repair changes only HBT/result identity schema 11 to 12;
+compact schemas, compact builder 5, package 0.8.0, Rust engine `rust-0.4.0`, and
+native ABI 3 remain unchanged. Native depth-sensitive matching remains out of
+scope.

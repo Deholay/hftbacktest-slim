@@ -157,11 +157,29 @@ hftbacktest-slim-build-cache \
 hftbacktest-slim-benchmark-read \
   --date 2026-03-02 \
   --cache-root data/tw_compact_v2 \
+  --compact-depth-levels 1 \
   --repetitions 3
 ```
 
 They are also available as `python -m hftbacktest_slim.cli.build_cache` and
 `python -m hftbacktest_slim.cli.benchmark_read`.
+
+Select the result-defining depth explicitly for Top-N builds and reads:
+
+```bash
+python -m hftbacktest_slim.cli.build_cache ... --compact-depth-levels 1
+python -m hftbacktest_slim.cli.build_cache ... --compact-depth-levels 3
+python -m hftbacktest_slim.cli.build_cache ... --compact-depth-levels 5
+
+python -m hftbacktest_slim.cli.benchmark_read ... --compact-depth-levels 1
+python -m hftbacktest_slim.cli.benchmark_read ... --compact-depth-levels 3
+python -m hftbacktest_slim.cli.benchmark_read ... --compact-depth-levels 5
+```
+
+Phase 5 measured real-data parity, cold/warm scans, RSS, and disk growth in
+[`docs/COMPACT_TOP_N_PHASE5_VALIDATION.md`](../docs/COMPACT_TOP_N_PHASE5_VALIDATION.md).
+The results do not extend the native matcher: Top-N still projects level 1 into
+the unchanged 80-byte row and ABI 3.
 
 ## Native library discovery
 
@@ -217,7 +235,10 @@ record per-level availability, complete/single-sided/empty book counts, source
 aggregates, policy identities, and profile-aware resource assumptions. Schema
 `bbo_v2`, native ABI `3`, and engine `rust-0.4.0` remain unchanged.
 Full-date, complete-month, and multi-date carry parity are recorded in
-`PHASE0_INVENTORY.md`; Phase 6 makes no performance claim.
+`PHASE0_INVENTORY.md`; Phase 6 makes no performance claim. The configurable
+depth Phase 5 adds a complete 157-pair N=1/N=3 slim comparison and a real
+two-date carry/restart gate without changing package 0.8.0, builder 5, native
+ABI 3, or Rust engine `rust-0.4.0`.
 
 ## Installation
 

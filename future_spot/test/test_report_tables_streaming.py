@@ -9,7 +9,12 @@ import unittest
 import pandas as pd
 
 from future_spot.test.backtest_pipeline import BacktestArtifacts
-from future_spot.test.report_tables import build_report_tables
+from future_spot.test.report_tables import (
+    _stream_latency_tables,
+    _stream_market_inputs,
+    _stream_trade_inputs,
+    build_report_tables,
+)
 
 
 def _filled_trade(timestamp: int, signal: str) -> dict[str, object]:
@@ -40,6 +45,39 @@ def _filled_trade(timestamp: int, signal: str) -> dict[str, object]:
 
 
 class StreamingReportTablesTest(unittest.TestCase):
+    def test_headerless_empty_compatibility_csvs_are_valid_empty_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trades_path = root / "trades.csv"
+            market_path = root / "market.csv"
+            latency_path = root / "latency.csv"
+            for path in (trades_path, market_path, latency_path):
+                path.write_text("", encoding="utf-8")
+
+            trades, failed = _stream_trade_inputs(
+                trades_path, chunk_rows=10, include_failure_windows=False
+            )
+            market, failure_market = _stream_market_inputs(
+                market_path,
+                failed_run_keys=set(),
+                chunk_rows=10,
+                include_failure_windows=False,
+            )
+            latency, counts, sample = _stream_latency_tables(
+                latency_path, selected_pair=None, chunk_rows=10
+            )
+
+            for frame in (
+                trades,
+                failed,
+                market,
+                failure_market,
+                latency,
+                counts,
+                sample,
+            ):
+                self.assertTrue(frame.empty)
+
     def test_summary_report_streams_large_inputs_and_releases_frames(self) -> None:
         run_key = "2026-01-02::2330_CFA6"
         with tempfile.TemporaryDirectory() as tmp:
