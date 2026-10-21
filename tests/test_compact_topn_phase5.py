@@ -237,7 +237,9 @@ def _runtime_paths(tmp_path: Path, depth: int) -> tuple[Path, Path]:
     return date / "source=stock" / "S.arrow", date / "source=stock_future" / "F.arrow"
 
 
-def _pair_config(spot: Path, future: Path, *, strategy_clock: str):
+def _pair_config(
+    spot: Path, future: Path, *, strategy_clock: str, ordering: str = "hbt"
+):
     pair = PairConfig(
         name="S_F",
         spot_symbol="S",
@@ -284,6 +286,7 @@ def _pair_config(spot: Path, future: Path, *, strategy_clock: str):
         execution_engine="slim",
         strategy_engine="python",
         strategy_clock=strategy_clock,
+        equal_timestamp_ordering=ordering,
         first_leg="future",
         step_ns=10,
         response_timeout_ns=50,
@@ -294,8 +297,9 @@ def _pair_config(spot: Path, future: Path, *, strategy_clock: str):
 
 
 @pytest.mark.parametrize("strategy_clock", ["step", "event"])
+@pytest.mark.parametrize("ordering", ["hbt", "sequence"])
 def test_slim_result_tables_are_identical_across_bbo_and_topn_profiles(
-    tmp_path: Path, strategy_clock: str
+    tmp_path: Path, strategy_clock: str, ordering: str
 ) -> None:
     baseline = None
     baseline_native = None
@@ -310,9 +314,10 @@ def test_slim_result_tables_are_identical_across_bbo_and_topn_profiles(
             np.testing.assert_array_equal(loaded.rows, baseline_native)
 
         backtester = HbtPairBacktester(
-            _pair_config(spot, future, strategy_clock=strategy_clock)
+            _pair_config(spot, future, strategy_clock=strategy_clock, ordering=ordering)
         )
         trades, summary = backtester.run()
+        assert summary.loc[0, "equal_timestamp_ordering"] == ordering
         result = (
             trades.reset_index(drop=True),
             summary.reset_index(drop=True),

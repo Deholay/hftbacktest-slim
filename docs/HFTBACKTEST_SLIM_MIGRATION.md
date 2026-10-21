@@ -67,6 +67,27 @@ The restart repair bumps only the strategy-owned HBT/result identity schema to
 This evidence does not change the package boundary or authorize native
 depth-sensitive matching.
 
+Equal-timestamp sequence extension (2026-09-15): package `0.6.0`, Rust
+crate/engine `0.5.0`, and native ABI `4` add an explicit slim-only `sequence`
+ordering mode. HBT-compatible ordering remains the default. In sequence mode,
+compact market rows use `(timestamp, asset_no, source_seq)` order; a request is
+anchored after the locally observed source row and before later rows with the
+same timestamp. Responses are returned without draining later equal-timestamp
+rows first. The selected ordering is result-defining and is recorded in the
+run manifest. Compact schema `bbo_v2` and builder version `3` are unchanged, so
+validated compact caches remain reusable across these result baselines.
+
+Combined depth/sequence integration (2026-10-21): package `0.9.0` retains the
+Phase 4/5 compact profiles and validation contract while incorporating Rust
+crate/engine `0.5.0` and native ABI `4` from the sequence extension. HBT ordering
+remains the default; sequence ordering is explicit and result-defining for both
+BBO and Top-N input. Physical schemas `bbo_v2`/`top5_v1` and compact builder `5`
+are unchanged, while strategy-owned HBT/result identity advances to `13` to
+separate this semantic integration from both branch baselines. The native row
+layout remains 80 bytes and matching still consumes only level 1. Package
+ownership and dependency direction remain those of the completed Phase 6
+migration. Historical validation above applies to the versions recorded there.
+
 For package location, code ownership, public API, and dependency direction,
 this document supersedes older extraction locations in
 `HBT_ACCELERATION_STRATEGY.md`. That strategy document and `AGENTS.md` remain

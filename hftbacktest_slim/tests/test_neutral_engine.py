@@ -8,6 +8,7 @@ from hftbacktest_slim import (
     AbiMismatchError,
     AssetConfig,
     EngineClosedError,
+    EqualTimestampOrdering,
     NativeLibraryNotFoundError,
     OrderStatus,
     Side,
@@ -102,6 +103,69 @@ def test_advance_to_next_feed_exposes_each_local_bbo_update(
 
         assert not engine.advance_to_next_feed()
         assert engine.current_timestamp == 112
+
+
+@pytest.mark.parametrize(
+    ("ordering", "expected_status", "expected_price"),
+    [
+        (EqualTimestampOrdering.HBT, OrderStatus.EXPIRED, 0.0),
+        (EqualTimestampOrdering.SEQUENCE, OrderStatus.FILLED, 110.0),
+    ],
+)
+def test_equal_timestamp_order_can_follow_observed_source_sequence(
+    tmp_path: Path,
+    write_partition,
+    native_library_path: Path,
+    ordering: EqualTimestampOrdering,
+    expected_status: OrderStatus,
+    expected_price: float,
+) -> None:
+    left = write_partition(
+        tmp_path / f"left_{ordering.name}.arrow",
+        [
+            (10, 100, 100, 110.0, 111.0, 1.0, 1.0, 110.0, 1),
+            (20, 100, 100, 100.0, 101.0, 1.0, 1.0, 100.0, 2),
+        ],
+    )
+    right = write_partition(tmp_path / f"right_{ordering.name}.arrow", [])
+    assets = [AssetConfig("A", left, 1.0), AssetConfig("B", right, 1.0)]
+
+    with SlimEngine(
+        assets,
+        library_path=native_library_path,
+        equal_timestamp_ordering=ordering,
+    ) as engine:
+        assert engine.advance_to_next_feed()
+        assert engine.depth(0).best_bid == 110.0
+        engine.submit_order(
+            asset_no=0,
+            order_id=1,
+            side=Side.SELL,
+            price=110.0,
+            quantity=1.0,
+            time_in_force=TimeInForce.FOK,
+        )
+        assert engine.wait_order_response(0, 1, 0)
+        order = engine.order(0, 1)
+        assert order is not None
+        assert order.status is expected_status
+        assert order.execution_price == expected_price
+
+        if ordering is EqualTimestampOrdering.SEQUENCE:
+            assert engine.depth(0).best_bid == 110.0
+            assert engine.advance_to_next_feed()
+            assert engine.depth(0).best_bid == 100.0
+
+
+def test_equal_timestamp_ordering_rejects_unknown_mode(
+    tmp_path: Path, write_partition, native_library_path: Path
+) -> None:
+    with pytest.raises(ValueError, match="equal_timestamp_ordering"):
+        SlimEngine(
+            _assets(tmp_path, write_partition),
+            library_path=native_library_path,
+            equal_timestamp_ordering="merged",
+        )
 
 
 def test_engine_requires_exactly_two_neutral_assets(

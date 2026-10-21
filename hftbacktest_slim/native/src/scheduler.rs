@@ -11,6 +11,13 @@ impl PendingKind {
             Self::Request => 3,
         }
     }
+
+    pub(crate) const fn sequence_priority(self) -> u8 {
+        match self {
+            Self::Request => 2,
+            Self::Response => 3,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -19,6 +26,7 @@ pub(crate) struct PendingEvent {
     pub(crate) asset_no: usize,
     pub(crate) order_id: u64,
     pub(crate) kind: PendingKind,
+    pub(crate) source_seq: u64,
     pub(crate) serial: u64,
 }
 
@@ -31,7 +39,7 @@ pub(crate) enum EventSource {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct NextEvent {
-    pub(crate) key: (i64, usize, u8, u64),
+    pub(crate) key: (i64, usize, u64, u8, u64),
     pub(crate) source: EventSource,
 }
 
@@ -58,35 +66,35 @@ mod tests {
     fn deterministic_key_preserves_timestamp_asset_kind_and_serial_priority() {
         let events = [
             NextEvent {
-                key: (100, 1, 0, 0),
+                key: (100, 1, 0, 0, 0),
                 source: EventSource::LocalData {
                     asset: 1,
                     row_index: 0,
                 },
             },
             NextEvent {
-                key: (100, 0, PendingKind::Request.event_kind_priority(), 1),
+                key: (100, 0, 0, PendingKind::Request.event_kind_priority(), 1),
                 source: EventSource::Pending { index: 1 },
             },
             NextEvent {
-                key: (100, 0, 2, 0),
+                key: (100, 0, 0, 2, 0),
                 source: EventSource::ExchData {
                     asset: 0,
                     row_index: 0,
                 },
             },
             NextEvent {
-                key: (100, 0, PendingKind::Response.event_kind_priority(), 2),
+                key: (100, 0, 0, PendingKind::Response.event_kind_priority(), 2),
                 source: EventSource::Pending { index: 0 },
             },
         ];
         let selected = select_next_event(events).expect("event");
-        assert_eq!(selected.key, (100, 0, 1, 2));
+        assert_eq!(selected.key, (100, 0, 0, 1, 2));
     }
 
     #[test]
     fn exact_duplicate_keys_keep_the_first_candidate() {
-        let key = (100, 0, 0, 1);
+        let key = (100, 0, 0, 0, 1);
         let selected = select_next_event([
             NextEvent {
                 key,

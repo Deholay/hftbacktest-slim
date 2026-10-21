@@ -1,4 +1,4 @@
-"""Project compact BBO or Top-N storage into native ABI-v3 BBO rows."""
+"""Project compact BBO or Top-N storage into native ABI-v4 BBO rows."""
 
 from __future__ import annotations
 

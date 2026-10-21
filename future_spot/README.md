@@ -163,10 +163,15 @@ runner selects the most recent eligible trading date strictly before today in
 Taipei (Monday therefore selects the previous Friday). An explicit date and
 credentials can be passed with the Python option names:
 
-The Daily Lark profile submits the second leg immediately after the first-leg
-response and applies a 1 ms successful-entry cooldown shared by every futures
-month with the same spot symbol. Shared cooldown execution requires the Slim
-event clock; blocked entries remain auditable as `RISK_SKIP` rows.
+The Daily Lark profile uses zero feed, entry, and response latency and selects
+`--equal-timestamp-ordering sequence`. Within one timestamp, each locally
+observed compact row is evaluated by `source_seq`; an order created from that
+row is handled before a later row carrying the same timestamp. This prevents a
+later same-timestamp BBO update from replacing the observed quote before the
+order is attempted. The profile submits the second leg immediately after the
+first-leg response and applies a 1 ms successful-entry cooldown shared by every
+futures month with the same spot symbol. Shared cooldown execution requires the
+Slim event clock; blocked entries remain auditable as `RISK_SKIP` rows.
 
 ```bat
 future_spot\scripts\run_daily_backtest_to_lark.bat --trade-date 2026-09-08 --webhook-url "https://open.larksuite.com/open-apis/bot/v2/hook/REPLACE_ME" --webhook-secret "REPLACE_ME"
@@ -406,10 +411,15 @@ only the neutral package API is supported.
 Because the execution port, adapters, and final package-owned implementation
 selection are result-defining sources, their migration changes
 `backtest_manifest.json` fingerprints and intentionally invalidates old result
-caches. Default compact schema `bbo_v2`, compact builder version 5, and native ABI 3
-disable matching while TWSE `trial_status_tag=1`; old compact caches and result
-manifests are intentionally invalidated. Trade and summary table schemas are
-unchanged; the HBT settings audit additionally reports `non_tradable_rows` per leg.
+caches. Package `0.9.0` combines compact depth 1–5 with explicit HBT-compatible
+or sequence-ordered equal-timestamp execution, using Rust engine `rust-0.5.0`
+and native ABI `4`. Default compact schema `bbo_v2`, optional `top5_v1`, and
+compact builder version `5` retain the non-tradable state that disables matching
+while TWSE `trial_status_tag=1`. The HBT settings audit reports
+`non_tradable_rows` per leg and the selected ordering mode. Ordering is
+result-defining, and result identity schema `13` prevents reuse of older
+matching results. The integration leaves the compact schemas and builder
+unchanged; compact caches still pass conservative implementation validation.
 
 ## Latest Run Snapshot
 

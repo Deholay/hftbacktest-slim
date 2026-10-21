@@ -10,6 +10,7 @@ import pytest
 from hftbacktest_slim import (
     ArrowDataError,
     AssetConfig,
+    OrderStatus,
     Side,
     SlimEngine,
     TimeInForce,
@@ -194,3 +195,58 @@ def test_slim_top5_uses_only_level_one_and_displayed_size_does_not_cap_fill(
         assert order is not None
         assert order.execution_price == pytest.approx(77.95)
         assert order.execution_quantity == pytest.approx(10.0)
+
+
+@pytest.mark.parametrize("depth", [2, 3, 4, 5])
+@pytest.mark.parametrize(
+    ("ordering", "expected_status"),
+    [("hbt", OrderStatus.EXPIRED), ("sequence", OrderStatus.FILLED)],
+)
+def test_topn_ordering_preserves_observed_quote_at_equal_timestamps(
+    tmp_path: Path, native_library_path: Path, depth: int,
+    ordering: str, expected_status: OrderStatus,
+) -> None:
+    values = {
+        "source_seq": [10, 20],
+        "exch_ts": [100, 100],
+        "local_ts_raw": [90, 90],
+        "last_px": [110.0, 100.0],
+        "total_volume": [1, 2],
+        "tradable": [1, 1],
+    }
+    for level in range(1, 6):
+        enabled = level <= depth
+        values[f"bid_px_{level}"] = (
+            [111.0 - level, 101.0 - level] if enabled else [None, None]
+        )
+        values[f"ask_px_{level}"] = (
+            [110.0 + level, 100.0 + level] if enabled else [None, None]
+        )
+        for side in ("bid", "ask"):
+            values[f"{side}_qty_{level}"] = [1.0, 1.0] if enabled else [None, None]
+    left = _write(tmp_path / "left.arrow", depth, values=values)
+    right = _write(
+        tmp_path / "right.arrow", depth,
+        values={name: [] for name in TOP5_SCHEMA.names},
+    )
+    with SlimEngine(
+        [AssetConfig("A", left, 1.0), AssetConfig("B", right, 1.0)],
+        library_path=native_library_path,
+        equal_timestamp_ordering=ordering,
+    ) as engine:
+        assert engine.advance_to_next_feed()
+        assert engine.depth(0).best_bid == 110.0
+        engine.submit_order(
+            asset_no=0, order_id=1, side=Side.SELL, price=110.0,
+            quantity=10.0, time_in_force=TimeInForce.FOK,
+        )
+        assert engine.wait_order_response(0, 1, 0)
+        order = engine.order(0, 1)
+        assert order is not None
+        assert order.status is expected_status
+        if ordering == "sequence":
+            assert order.execution_price == 110.0
+            assert order.execution_quantity == 10.0
+            assert engine.depth(0).best_bid == 110.0
+            assert engine.advance_to_next_feed()
+            assert engine.depth(0).best_bid == 100.0

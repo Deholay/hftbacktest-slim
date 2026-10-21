@@ -3,7 +3,10 @@ use std::collections::HashMap;
 use crate::book::DepthState;
 use crate::matcher::match_immediate;
 use crate::scheduler::{EventSource, NextEvent, PendingEvent, PendingKind, consider_next_event};
-use crate::types::{AssetConfig, BboRow, BboView, OrderView, STATUS_NEW, TIF_FOK, TIF_IOC};
+use crate::types::{
+    AssetConfig, BboRow, BboView, EQUAL_TIMESTAMP_HBT, EQUAL_TIMESTAMP_SEQUENCE, OrderView,
+    STATUS_NEW, TIF_FOK, TIF_IOC,
+};
 
 #[derive(Clone, Debug)]
 struct AssetState {
@@ -18,6 +21,7 @@ struct AssetState {
     exch_view: BboView,
     feed_latency: Option<(i64, i64)>,
     order_latency: Option<(i64, i64, i64)>,
+    local_source_seq: Option<u64>,
     config: AssetConfig,
 }
 
@@ -47,6 +51,7 @@ impl AssetState {
             exch_view: BboView::default(),
             feed_latency: None,
             order_latency: None,
+            local_source_seq: None,
             config,
         }
     }
@@ -65,10 +70,15 @@ pub struct SlimEngine {
     pending: Vec<PendingEvent>,
     next_serial: u64,
     current_ts: i64,
+    equal_timestamp_ordering: i32,
 }
 
 impl SlimEngine {
-    pub(crate) fn new(rows: [Vec<BboRow>; 2], configs: [AssetConfig; 2]) -> Self {
+    pub(crate) fn new(
+        rows: [Vec<BboRow>; 2],
+        configs: [AssetConfig; 2],
+        equal_timestamp_ordering: i32,
+    ) -> Self {
         let assets = [
             AssetState::new(rows[0].clone(), configs[0]),
             AssetState::new(rows[1].clone(), configs[1]),
@@ -89,6 +99,41 @@ impl SlimEngine {
             pending: Vec::new(),
             next_serial: 0,
             current_ts: first_ts,
+            equal_timestamp_ordering,
+        }
+    }
+
+    fn data_key(
+        &self,
+        ts: i64,
+        asset_no: usize,
+        source_seq: u64,
+        kind: u8,
+    ) -> (i64, usize, u64, u8, u64) {
+        if self.equal_timestamp_ordering == EQUAL_TIMESTAMP_SEQUENCE {
+            (ts, asset_no, source_seq, kind, source_seq)
+        } else {
+            (ts, asset_no, 0, kind, source_seq)
+        }
+    }
+
+    fn pending_key(&self, pending: PendingEvent) -> (i64, usize, u64, u8, u64) {
+        if self.equal_timestamp_ordering == EQUAL_TIMESTAMP_SEQUENCE {
+            (
+                pending.ts,
+                pending.asset_no,
+                pending.source_seq,
+                pending.kind.sequence_priority(),
+                pending.serial,
+            )
+        } else {
+            (
+                pending.ts,
+                pending.asset_no,
+                0,
+                pending.kind.event_kind_priority(),
+                pending.serial,
+            )
         }
     }
 
@@ -101,7 +146,7 @@ impl SlimEngine {
                 consider_next_event(
                     &mut best,
                     NextEvent {
-                        key: (asset.local_ts(row), asset_no, 0, row.source_seq),
+                        key: self.data_key(asset.local_ts(row), asset_no, row.source_seq, 0),
                         source: EventSource::LocalData {
                             asset: asset_no,
                             row_index,
@@ -114,7 +159,16 @@ impl SlimEngine {
                 consider_next_event(
                     &mut best,
                     NextEvent {
-                        key: (row.exch_ts, asset_no, 2, row.source_seq),
+                        key: self.data_key(
+                            row.exch_ts,
+                            asset_no,
+                            row.source_seq,
+                            if self.equal_timestamp_ordering == EQUAL_TIMESTAMP_SEQUENCE {
+                                1
+                            } else {
+                                2
+                            },
+                        ),
                         source: EventSource::ExchData {
                             asset: asset_no,
                             row_index,
@@ -127,12 +181,7 @@ impl SlimEngine {
             consider_next_event(
                 &mut best,
                 NextEvent {
-                    key: (
-                        pending.ts,
-                        pending.asset_no,
-                        pending.kind.event_kind_priority(),
-                        pending.serial,
-                    ),
+                    key: self.pending_key(*pending),
                     source: EventSource::Pending { index },
                 },
             );
@@ -155,6 +204,7 @@ impl SlimEngine {
                         .local_depth
                         .apply_row(row, local_ts, state.config.tick_size);
                 state.feed_latency = Some((row.exch_ts, local_ts));
+                state.local_source_seq = Some(row.source_seq);
                 state.local_cursor += 1;
                 None
             }
@@ -172,7 +222,12 @@ impl SlimEngine {
                 let pending = self.pending.swap_remove(index);
                 match pending.kind {
                     PendingKind::Request => {
-                        self.process_order_request(pending.asset_no, pending.order_id, pending.ts);
+                        self.process_order_request(
+                            pending.asset_no,
+                            pending.order_id,
+                            pending.ts,
+                            pending.source_seq,
+                        );
                         None
                     }
                     PendingKind::Response => {
@@ -191,7 +246,7 @@ impl SlimEngine {
         }
     }
 
-    fn process_order_request(&mut self, asset_no: usize, order_id: u64, ts: i64) {
+    fn process_order_request(&mut self, asset_no: usize, order_id: u64, ts: i64, source_seq: u64) {
         let view = self.assets[asset_no].exch_view;
         let response_latency = self.assets[asset_no].config.response_latency_ns;
         if let Some(order) = self.orders.get_mut(&(asset_no, order_id)) {
@@ -213,6 +268,7 @@ impl SlimEngine {
                 asset_no,
                 order_id,
                 kind: PendingKind::Response,
+                source_seq,
                 serial: self.next_serial,
             });
         }
@@ -248,6 +304,7 @@ impl SlimEngine {
             return -2;
         }
         let request_ts = self.current_ts;
+        let source_seq = self.assets[asset_no].local_source_seq.unwrap_or(0);
         self.orders.insert(
             (asset_no, order_id),
             OrderView {
@@ -273,6 +330,7 @@ impl SlimEngine {
             asset_no,
             order_id,
             kind: PendingKind::Request,
+            source_seq,
             serial: self.next_serial,
         });
         0
@@ -290,11 +348,13 @@ impl SlimEngine {
         if !self.process_through(deadline, Some((asset_no, order_id))) {
             return 1;
         }
-        // HftBacktest's goto() narrows its target to the requested response
-        // timestamp and then drains every other event at that same timestamp
-        // before returning to the strategy.
-        let response_ts = self.current_ts;
-        self.process_through(response_ts, None);
+        if self.equal_timestamp_ordering == EQUAL_TIMESTAMP_HBT {
+            // HftBacktest's goto() narrows its target to the requested response
+            // timestamp and then drains every other event at that same timestamp
+            // before returning to the strategy.
+            let response_ts = self.current_ts;
+            self.process_through(response_ts, None);
+        }
         0
     }
 
@@ -408,6 +468,7 @@ mod tests {
                     tick_size: 1.0,
                 },
             ],
+            EQUAL_TIMESTAMP_HBT,
         )
     }
 
@@ -448,6 +509,39 @@ mod tests {
     }
 
     #[test]
+    fn sequence_ordering_matches_after_observed_row_before_later_equal_timestamp_row() {
+        let config = AssetConfig {
+            local_adjustment_ns: 0,
+            feed_offset_ns: 0,
+            entry_latency_ns: 0,
+            response_latency_ns: 0,
+            tick_size: 1.0,
+        };
+        let mut value = SlimEngine::new(
+            [
+                vec![
+                    row(10, 100, 100, 110.0, 111.0, 1.0),
+                    row(20, 100, 100, 100.0, 101.0, 1.0),
+                ],
+                vec![],
+            ],
+            [config, config],
+            EQUAL_TIMESTAMP_SEQUENCE,
+        );
+
+        assert_eq!(value.advance_to_next_feed(), 0);
+        assert_eq!(value.assets[0].local_view.bid_px, 110.0);
+        assert_eq!(value.submit(0, 1, -1, 110.0, 1.0, TIF_FOK), 0);
+        assert_eq!(value.wait_response(0, 1, 0), 0);
+        assert_eq!(value.orders[&(0, 1)].status, STATUS_FILLED);
+        assert_eq!(value.orders[&(0, 1)].exec_price, 110.0);
+        assert_eq!(value.assets[0].exch_view.bid_px, 110.0);
+
+        assert_eq!(value.advance_to_next_feed(), 0);
+        assert_eq!(value.assets[0].local_view.bid_px, 100.0);
+    }
+
+    #[test]
     fn independent_feed_correction_and_order_latency_are_audited() {
         let config = AssetConfig {
             local_adjustment_ns: 20,
@@ -459,6 +553,7 @@ mod tests {
         let mut value = SlimEngine::new(
             [vec![row(0, 100, 80, 99.0, 101.0, 1.0)], vec![]],
             [config, config],
+            EQUAL_TIMESTAMP_HBT,
         );
         value.process_through(107, None);
         assert_eq!(value.assets[0].feed_latency, Some((100, 107)));
@@ -482,6 +577,7 @@ mod tests {
                 vec![row(0, 105, 105, 199.0, 201.0, 1.0)],
             ],
             [config, config],
+            EQUAL_TIMESTAMP_HBT,
         );
         value.process_through(100, None);
         value.submit(0, 1, 1, 101.0, 1.0, TIF_FOK);
@@ -508,6 +604,7 @@ mod tests {
                 vec![row(0, 101, 111, 199.0, 201.0, 3.0)],
             ],
             [config, config],
+            EQUAL_TIMESTAMP_HBT,
         );
 
         assert_eq!(value.advance_to_next_feed(), 0);

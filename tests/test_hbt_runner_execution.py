@@ -440,6 +440,9 @@ class PersistentExecutorTest(unittest.TestCase):
 
             depth2 = hbt_manifest_payload(args(2), [record])
             depth3 = hbt_manifest_payload(args(3), [record])
+            sequence_args = args(3)
+            sequence_args.equal_timestamp_ordering = "sequence"
+            sequence = hbt_manifest_payload(sequence_args, [record])
 
         self.assertEqual(depth2["compact_profile"], "top5")
         self.assertEqual(depth2["compact_schema_version"], "top5_v1")
@@ -447,8 +450,12 @@ class PersistentExecutorTest(unittest.TestCase):
         self.assertEqual(depth2["compact_identities"][0]["identity_sha256"], "depth-two")
         self.assertEqual(depth3["compact_identities"][0]["identity_sha256"], "depth-three")
         self.assertNotEqual(depth2, depth3)
-        self.assertEqual(depth3["slim_package_version"], "0.8.0")
-        self.assertEqual(depth3["slim_native_abi_version"], 3)
+        self.assertEqual(depth3["slim_package_version"], "0.9.0")
+        self.assertEqual(depth3["slim_native_abi_version"], 4)
+        self.assertEqual(sequence["compact_identities"], depth3["compact_identities"])
+        self.assertEqual(sequence["equal_timestamp_ordering"], "sequence")
+        self.assertEqual(sequence["arguments"]["equal_timestamp_ordering"], "sequence")
+        self.assertNotEqual(sequence, depth3)
 
     def test_daily_manifest_identity_is_independent_of_requested_range_end(self) -> None:
         record = DailyPairRecord(
@@ -480,7 +487,7 @@ class PersistentExecutorTest(unittest.TestCase):
         self.assertEqual(first["arguments"]["start_date"], "2026-03-02")
         self.assertEqual(first["arguments"]["end_date"], "2026-03-02")
         self.assertEqual(global_extended["arguments"]["end_date"], "2026-03-03")
-        self.assertEqual(first["schema_version"], 12)
+        self.assertEqual(first["schema_version"], 13)
 
     def test_run_backtests_uses_caller_owned_executor(self) -> None:
         records = [

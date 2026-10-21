@@ -1,12 +1,13 @@
 # hftbacktest-slim
 
 `hftbacktest-slim` is the project-owned, strategy-neutral compact-BBO data and
-replay runtime. Version `0.8.0` extends the stable Phase 6 public boundary: the canonical
+replay runtime. Version `0.9.0` combines configurable compact depth with explicit
+equal-timestamp ordering on the stable Phase 6 public boundary: the canonical
 schema/native dtype, Top-5 normalization, timestamp ordering, audit, streaming
 cache builder, manifest validation, sidecars, resource controls, publication,
 reader, compact CLIs, and neutral engine API live in this standalone package,
 and `future_spot` now consumes that API through strategy-owned adapters. The native crate
-is version `0.4.0`, engine identity is `rust-0.4.0`, and C ABI version is `3`.
+is version `0.5.0`, engine identity is `rust-0.5.0`, and C ABI version is `4`.
 
 The supported profile is deliberately constrained:
 
@@ -14,7 +15,8 @@ The supported profile is deliberately constrained:
 - an explicit caller-controlled strategy clock;
 - immediate crossing FOK or IOC limit orders;
 - no partial fills and no displayed-size cap;
-- independent feed, order-entry, and order-response latency; and
+- independent feed, order-entry, and order-response latency;
+- explicit HBT-compatible or source-sequence equal-timestamp ordering; and
 - no passive queue, cancel/modify, market-order, or arbitrary depth behavior.
 
 ## Neutral API
@@ -22,7 +24,13 @@ The supported profile is deliberately constrained:
 Only root-package imports are the primary runtime contract:
 
 ```python
-from hftbacktest_slim import AssetConfig, Side, SlimEngine, TimeInForce
+from hftbacktest_slim import (
+    AssetConfig,
+    EqualTimestampOrdering,
+    Side,
+    SlimEngine,
+    TimeInForce,
+)
 
 left = AssetConfig(
     symbol="0050",
@@ -37,7 +45,10 @@ right = AssetConfig(
     tick_size=1.0,
 )
 
-with SlimEngine([left, right]) as engine:
+with SlimEngine(
+    [left, right],
+    equal_timestamp_ordering=EqualTimestampOrdering.HBT,
+) as engine:
     if engine.advance(1_000_000_000):
         depth = engine.depth(0)
         engine.submit_order(
@@ -179,7 +190,7 @@ python -m hftbacktest_slim.cli.benchmark_read ... --compact-depth-levels 5
 Phase 5 measured real-data parity, cold/warm scans, RSS, and disk growth in
 [`docs/COMPACT_TOP_N_PHASE5_VALIDATION.md`](../docs/COMPACT_TOP_N_PHASE5_VALIDATION.md).
 The results do not extend the native matcher: Top-N still projects level 1 into
-the unchanged 80-byte row and ABI 3.
+the unchanged 80-byte row used by ABI 4.
 
 ## Native library discovery
 
@@ -193,7 +204,7 @@ The library is resolved deterministically without a system-basename search:
 
 The library is loaded only when an engine is constructed. Importing
 `hftbacktest_slim` does not load the shared object. `engine.library_path`
-records the resolved diagnostic path. ABI values other than `3` raise
+records the resolved diagnostic path. ABI values other than `4` raise
 `AbiMismatchError` before engine construction.
 
 Build the development artifact from the repository root:
@@ -227,13 +238,19 @@ Strategy pricing, execution policy, carry, capital, and reporting remain
 outside this package.
 
 The final result implementation fingerprint selection intentionally invalidates
-older result manifests. Version `0.8.0` adds Top-N reader/reference-adapter
+older result manifests. Version `0.9.0` combines Top-N profiles with the optional
+`sequence` ordering mode, using Rust engine `rust-0.5.0` and native ABI `4`.
+HBT ordering remains the default, and slim matching still uses level 1 only.
+Compact schemas `bbo_v2`/`top5_v1` and builder `5` are unchanged; result identity
+schema `13` separates this integration from both previous branch baselines.
+
+Previously, version `0.8.0` added Top-N reader/reference-adapter
 result identities without changing compact schemas or builder version. Version `0.7.0` invalidates compact-cache identity
 through builder version `5` and the Phase 3 manifest/content-validation
 contract. Compact files are validated incrementally by record batch; manifests
 record per-level availability, complete/single-sided/empty book counts, source
 aggregates, policy identities, and profile-aware resource assumptions. Schema
-`bbo_v2`, native ABI `3`, and engine `rust-0.4.0` remain unchanged.
+`bbo_v2`, native ABI `3`, and engine `rust-0.4.0` were unchanged at that checkpoint.
 Full-date, complete-month, and multi-date carry parity are recorded in
 `PHASE0_INVENTORY.md`; Phase 6 makes no performance claim. The configurable
 depth Phase 5 adds a complete 157-pair N=1/N=3 slim comparison and a real
