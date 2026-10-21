@@ -1,60 +1,61 @@
-# 臺灣市場微結構回測
+# Taiwan Market Microstructure Backtesting
 
-本專案以 [`hftbacktest`](https://github.com/nkaz001/hftbacktest) 為基礎，提供臺灣
-股票、ETF、零股與股票期貨市場資料的研究工具。專案可將臺灣五檔
-market-by-price 行情轉換為 HftBacktest events，提供精簡的跨策略 API，並實作包含
-延遲、部位留倉、資金重播及報表的全市場股票期貨／現貨套利流程。
+Research tools for Taiwan stocks, ETFs, odd lots, and stock futures, built
+around [HftBacktest](https://github.com/nkaz001/hftbacktest). The project converts
+Top-5 market-by-price snapshots into replayable inputs and provides a
+full-market futures/spot arbitrage pipeline with independent leg latency,
+position carry, shared-capital replay, and durable reports.
 
-主要研究路徑是 `future_spot/`。根目錄下的 notebooks 可用於轉換結果檢查、
-queue model 實驗、新策略原型，以及透過新版 `hftbacktest_slim` package 執行
-期現貨視覺化 runner。
+The repository includes two explicit execution paths: installed HftBacktest as
+the default reference engine, and the project-owned `hftbacktest_slim` runtime
+for immediate BBO execution. Strategy decisions, risk, carry, capital, and
+reporting remain in `future_spot/`.
 
-## 回測結果
+## Documentation
 
-目前保留的最新投資組合報告涵蓋指定區間 **2026-01-01 至 2026-07-31**。圖表中
-認列損益的日期為 **2026-01-08 至 2026-07-30**，因為只有雙腿完成配對出場時才
-會認列損益。
+| Document | Contents |
+| --- | --- |
+| [Slim engine introduction](docs/SLIM_ENGINE.md) | Architecture, matching limits, clocks, sequence ordering, compact depth, and usage examples. |
+| [Acceleration strategy](docs/HBT_ACCELERATION_STRATEGY.md) | Execution semantics, bounded processing, implementation phases, and acceptance gates. |
+| [Slim package migration](docs/HFTBACKTEST_SLIM_MIGRATION.md) | Package ownership, dependency boundaries, public API, and version history. |
+| [Compact Top-N depth design](docs/COMPACT_TOP_N_DEPTH_PHASES.md) | Normalization, schemas, depth selection, cache identities, and rollout phases. |
+| [Compact Top-N validation](docs/COMPACT_TOP_N_PHASE5_VALIDATION.md) | Recorded parity results, real-data rollout, scan counts, benchmarks, and limitations. |
+| [Research report](docs/report.md) | Earlier research and acceleration overview in Traditional Chinese; use the versioned design and validation documents for current contracts. |
+| [Slim package reference](hftbacktest_slim/README.md) | Neutral Python API, package installation, cache commands, and native-library discovery. |
+| [Futures/spot runner guide](future_spot/README.md) | Data paths, latency, carry, capital, reporting, and daily Lark notifications. |
 
-| 指標 | 結果 |
-| --- | ---: |
-| 已實現損益 | NT$7,069,581.38 |
-| NT$50M 初始資金的 ROI | 14.14% |
-| 最高資金占用 | NT$49,779,287.42（99.56%） |
-| 候選／接受進場 | 8,206 / 4,185（51.00%） |
-| 因資金不足遭拒的進場 | 4,021 筆，共 29 天 |
-| 接受出場 | 4,179 |
+## Current version and defaults
 
-![期現貨已實現損益投資組合總覽](docs/figure/futures-spot-portfolio-overview-20260101-20260731.png)
+`main` combines configurable compact depth from `feat/extend_depth` with
+sequence ordering and daily reporting from `feat/future_spot`. The full research
+project and its strategy-independent slim package share this repository.
 
-這是模擬研究結果，不代表實盤績效。資金重播共用 NT$50M，並停用槓桿：現貨與
-期貨皆按名目金額的 100% 計入資金占用，且各自上限為 NT$25M；未納入未平倉部位
-的市值評價。結果排除七個 tick 資料不完整的日期與八個到期殘留部位配對回測；
-資金重播另外移除六個到期殘留部位。此次執行也記錄了 2026-07-10 的兩筆 event
-data 缺漏錯誤。精確的輸入、排除項目、延遲設定與程式碼指紋都保存在
-該次執行的 `backtest_manifest.json`。
+| Component or setting | Version or default |
+| --- | --- |
+| Python package | `hftbacktest-slim 0.9.0` |
+| Rust engine / native ABI | `rust-0.5.0` / `4` |
+| Compact schemas / builder | `bbo_v2`, `top5_v1` / `5` |
+| HBT/result cache identity | `13` |
+| Execution engine | `reference` |
+| Strategy clock | `step`, every `1000 ms` |
+| Equal-timestamp ordering | `hbt`; slim also supports explicit `sequence` |
+| Compact depth | `1`; selectable from `1` through `5` |
 
-來源輸出位於：
+Rebuild the native library after updating the runtime. Result identity 13
+separates the combined implementation from older matching results. Compact
+schemas and builder version are unchanged by this integration, but cache reuse
+still requires conservative source, implementation, and content validation.
 
-```text
-future_spot/output/hbt_daily_full_market_20260101_20260731_future_order_1ms_response_1ms_feed_0ms_spot_order_1ms_response_35ms_feed_0ms/
-```
+## Quick start
 
-## 快速開始
-
-使用 Python 3.11 以上版本，並在專案根目錄安裝共用研究套件：
+Use Python 3.11 or newer for repository workflows. Run installation and examples
+from the repository root. Slim also requires a Rust/Cargo toolchain.
 
 ```bash
 python3 -m pip install -r requirements.txt
 ```
 
-從同一個 repository root 啟動已改接新版 neutral slim package 的期現貨
-視覺化 notebook：
-
-```bash
-jupyter notebook notebooks/hbt_pair_backtest_visualization.ipynb
-```
-
-執行全市場工作前，先跑一個小型單行程 smoke test：
+Run a small reference-engine smoke test before a full-market job:
 
 ```bash
 python3 future_spot/test/run_full_backtest.py \
@@ -64,12 +65,11 @@ python3 future_spot/test/run_full_backtest.py \
   --max-pairs 5
 ```
 
-由於 `--engine` 預設為 `reference`，上述指令會使用 reference engine。
+The reference path uses the Numba scanner by default. Select
+`--strategy-engine python` for debugging or a custom strategy implementing
+`scripts.strategy_api`.
 
-### Slim engine
-
-Slim engine 是專案自行維護的 Rust scheduler 與 matcher，適用於受限的期現貨 BBO
-路徑。先建置 shared library，再以 `--engine slim` 明確選用：
+To run slim, build its shared library and select the engine explicitly:
 
 ```bash
 cargo build --workspace --release
@@ -83,91 +83,136 @@ python3 future_spot/test/run_full_backtest.py \
   --compact-cache-root data/tw_compact_v2
 ```
 
-`--engine slim` 會自動選用 `--market-data-cache compact`。首次處理某個日期時，
-runner 會以串流方式將所需的股票與期貨每日資料來源寫成具版本控制、依商品分割的
-Arrow IPC 檔案；後續執行只有在 manifest 與來源 identity 驗證通過後，才會重用
-該日期的 cache。預設使用 LZ4 壓縮。Cache builder 預設容量上限為 200 GB，並保留
-至少 200 GB 可用空間；請依執行環境明確設定 `--compact-cache-max-gb` 與
-`--compact-cache-min-free-gb`。只有刻意進行 cold rebuild 時才使用
-`--rebuild-compact-cache`。
+Slim automatically selects compact data. It supports exactly two assets per
+engine, immediate crossing FOK/IOC orders, and full fills without a displayed
+size cap. Passive orders, queue models, partial fills, and depth-sensitive
+matching use the reference path. Storing levels 2–5 in compact data does not
+extend slim matching beyond level 1.
 
-Slim 會保留設定的 `step_ms` 策略決策時鐘、各腿獨立的 feed/order/response latency、
-第二腿條件重驗、部位留倉及結果稽核。其 matching contract 刻意限制如下：
-
-- 每組 pair 固定為兩項資產：現貨與期貨；
-- 僅支援立即穿價 BBO、且 time in force 必須嚴格為 FOK 或 IOC；
-- 不允許 partial fill；未穿價訂單會到期，顯示的 BBO 數量不會限制成交量；
-- 不支援被動 GTC/GTX、queue position、depth-sensitive 或任意 custom strategy
-  行為。
-
-不支援的模式應使用 reference engine；reference engine 同時也是 regression oracle。
-在 reference 路徑中，`--strategy-engine numba` 是預設 scanner，
-`--strategy-engine python` 則供除錯或 custom strategy 使用。Slim 使用共用的 Python
-策略迴圈，而 scheduling、latency、市場狀態與 matching 由 Rust core 執行。
-
-Slim 也提供獨立的逐行情語意。指定 `--strategy-clock event` 後，任一腿的本地 BBO
-feed row 都會喚醒策略並立即重算；未指定時仍維持既有的
-`--strategy-clock step --step-ms 1000` 基準。Event clock 不支援 reference engine，
-且預設輸出目錄會加上 `_clock_event`，避免和固定步進結果混用：
+For event-clock execution with three stored levels and source-sequence ordering:
 
 ```bash
 python3 future_spot/test/run_full_backtest.py \
   --engine slim \
+  --compact-depth-levels 3 \
   --strategy-clock event \
-  --start-date 2026-09-07 \
-  --end-date 2026-09-07
+  --equal-timestamp-ordering sequence \
+  --start-date 2026-03-02 \
+  --end-date 2026-03-02 \
+  --workers 1 \
+  --max-pairs 5 \
+  --output-dir future_spot/output/example_slim_n3_sequence_20260302
 ```
 
-#### Slim engine 實作位置
+Clock and ordering are separate result-defining choices. The defaults remain
+fixed-step execution and HBT-compatible ordering. See the
+[slim engine introduction](docs/SLIM_ENGINE.md) for their semantics, reference
+Top-N reconstruction, cache namespaces, and Python API examples.
 
-| 路徑 | Slim engine 職責 |
-| --- | --- |
-| `hftbacktest_slim/native/src/` | Rust scheduler、BBO state、latency/order state，以及立即 FOK/IOC matching core；依 types、book、scheduler、matcher、engine 與 FFI 職責分割。 |
-| `hftbacktest_slim/src/hftbacktest_slim/engine/` | Neutral `SlimEngine`、`ctypes` ABI binding、Arrow partition reader、lifecycle 與 capability validation。 |
-| `hftbacktest_slim/src/hftbacktest_slim/market_data/` | Canonical `bbo_v2` schema/aligned dtype、TWSE 緩撮交易狀態、Top-5 normalization、timestamp ordering/sidecars 與 generic compact audit。 |
-| `hftbacktest_slim/src/hftbacktest_slim/cache/` | Builder v5 one-scan cache、depth/profile manifest identity、content validation、disk budgets 與 atomic publication。 |
-| `future_spot/arbitrage/execution_port.py`、`reference_execution.py`、`slim_execution.py` | Strategy-owned execution port，以及 reference／neutral slim adapters。 |
-| `future_spot/arbitrage/hbt_backtest.py` | 經由 execution port 執行共用 pair strategy 流程。 |
-| `future_spot/arbitrage/full_market_runner.py` | CLI、compact data 編排、依日期循序留倉、workers、結果持久化與 manifests。 |
+Default data paths use the Linux/WSL `/mnt/z` mount. Adapt
+`--futures-parquet-template`, the TWSE/TPEX daily templates,
+`--stock-tick-parquet-template`, and `--data-platform-base` to your storage.
+The [runner guide](future_spot/README.md) documents the full configuration.
+Optional provider SDKs are excluded from `requirements.txt`.
 
-Linux 環境會產生 `target/release/libhbt_slim.so`。Compact cache 的預設位置為
-`data/tw_compact_v2/date=YYYYMMDD/source={stock|stock_future}/<symbol>.arrow`。
-Python neutral API 可由 `hftbacktest_slim` 匯入 `AssetConfig`、`SlimEngine`、
-`Side`、`TimeInForce`、`BBO_SCHEMA`、`CompactBuildConfig`、
-`CompactCacheStore` 與 `CompactSource`。Native library 依序採用明確的 `library_path`、
-`HFTBACKTEST_SLIM_LIBRARY`、package artifact，以及 root Cargo release artifact；
-package import 本身不會載入 shared library。預設 compact schema 為 `bbo_v2`，builder
-為 version `5`；`depth_levels=2..5` 使用固定 `top5_v1` schema 與獨立 namespace。
-Phase 5 已完成 deterministic parity、157-pair 單日 rollout，以及含真實留倉的兩日 restart
-驗證；量測與限制見 `docs/COMPACT_TOP_N_PHASE5_VALIDATION.md`。`tradable` 欄位在 TWSE `trial_status_tag=1` 時清空 BBO 並停止
-matching，直到下一筆可交易行情。舊 compact cache 會保守失效。`future_spot` slim path 直接使用 neutral API；
-`examples/slim_two_asset_strategy/` 以另一個獨立策略驗證相同擴充邊界。這次 integration
-source 變更與 Phase 6 source selection 會使舊 result manifests 失效，但移除舊入口
-本身不會使 compact cache 失效。
-
-安裝 `requirements.txt` 後，使用 package-owned cache commands：
+For interactive inspection, use the thin visualization notebook:
 
 ```bash
-python3 -m hftbacktest_slim.cli.build_cache --help
-python3 -m hftbacktest_slim.cli.benchmark_read --help
-
-python3 future_spot/test/run_full_backtest.py --market-data-cache compact --compact-depth-levels 1
-python3 future_spot/test/run_full_backtest.py --market-data-cache compact --compact-depth-levels 3
-python3 future_spot/test/run_full_backtest.py --market-data-cache compact --compact-depth-levels 5
+jupyter notebook notebooks/hbt_pair_backtest_visualization.ipynb
 ```
 
-Cold build 對每個日期的股票及期貨 physical source 各讀一次 projected record
-batches；warm validated reuse 不讀 raw payload。預設 LZ4，亦保留 `none` 與 `zstd`。
-建置前依 profile-aware row estimate（`bbo_v2=96`、`top5_v1=256` bytes）乘上
-`source_rows * 1.20` 檢查容量及 free-space reserve，每個 batch 後重查；
-manifest 最後寫入並以同檔案系統 atomic rename 發布，失敗時只清理當次 incomplete
-temporary date，不會自動刪除 completed cache、raw data 或 results。
-Reference engine 會重建所選 N 個 normalized distinct levels；slim 對 `top5_v1`
-只投影 level 1 到未變更的 80-byte native BBO row。Slim 不支援 depth-sensitive
-matching、partial fills、displayed-size cap、passive/GTC/GTX 或 queue semantics。
+## Futures/spot workflow and outputs
 
-目前保留的一月至七月回測，除日期區間與資料路徑外，另使用以下會影響結果的執行與
-資金設定：
+The runner selects trading dates and eligible pairs, builds or validates market
+data, and replays each pair with independent feed, order-entry, and response
+latency per leg. Futures are the default first leg. After its fill, the strategy
+rechecks the spot-leg condition and applies the configured flatten action if
+execution fails. `--post-first-feed-wait spot` explicitly waits for a new spot
+feed after the first futures response.
+
+With carry enabled, dates execute sequentially and held contracts enter the
+next day's universe without an implicit roll. Pairs within one date can use
+worker processes. Results persist by date under `core/dates/trade_date=.../`
+before proceeding; resume requires a verified contiguous manifest and carry
+chain. Compatibility CSVs and reports are generated in bounded chunks.
+
+| Output | Purpose |
+| --- | --- |
+| `summary_all_daily_pairs.csv` | Pair/date status, positions, and realized PnL. |
+| `trades_all_daily_pairs.csv` | Order and execution audit. |
+| `entry_exit_all_daily_pairs.csv` | Entry/exit signals and execution details. |
+| `market_all_daily_pairs.csv` | Sampled market state and non-HOLD signals. |
+| `latency_all_daily_pairs.csv` | Local and exchange event timelines. |
+| `position_carry_status.csv` | Initial/final positions, expiry, and carry audit. |
+| `hbt_settings.csv`, `conversion_status.csv` | Execution settings and conversion/cache audit. |
+| `run_errors.csv` | Missing inputs and pair failures; inspect after every run. |
+| `backtest_manifest.json` | Result-defining arguments, inputs, and implementation identity. |
+| `reports/`, `figures/` | Capital, ROI, failure, latency, and performance reports. |
+
+`--report-mode summary` is the bounded default. Detailed report tables default
+to Parquet. Full diagnostic reporting requires
+`--report-mode full --full-report-max-rows N`. Use
+`--skip-entry-exit-by-pair` to omit separate files for each pair.
+
+Shared-capital replay processes saved fill candidates in timestamp order and
+reports candidate, accepted, and rejected entries separately. `--leverage`
+uses configured futures margin and spot own-funds ratios; `--no-leverage`
+charges 100% capital to both legs. Realized portfolio ROI uses
+capital-constrained realized PnL divided by starting own capital, excluding
+open-position marks.
+
+### Daily opportunity report
+
+```bash
+python3 future_spot/test/run_full_backtest.py \
+  --start-date 2026-03-02 \
+  --end-date 2026-03-02 \
+  --report-mode daily
+```
+
+Daily mode writes `daily_backtest_summary.csv` with filled signals, both legs'
+BBO, and raw exchange timestamps. It disables cross-date carry, capital reports,
+and figures; required configs and market-data caches may still be built or
+reused. This report describes opportunities rather than capital-constrained
+portfolio performance.
+
+The Windows/WSL daily Lark runner uses slim, the event clock, sequence ordering,
+and zero latency. See
+[daily Lark notifications](future_spot/README.md#daily-run-with-lark-notification-windowswsl)
+for setup.
+
+## Historical portfolio results
+
+The saved portfolio report covers the requested interval **2026-01-01 through
+2026-07-31**. Recognized exit-date PnL spans **2026-01-08 through 2026-07-30**.
+These results have not been rerun with the combined `0.9.0` implementation.
+
+| Metric | Result |
+| --- | ---: |
+| Realized PnL | NT$7,069,581.38 |
+| ROI on NT$50M starting capital | 14.14% |
+| Peak capital usage | NT$49,779,287.42 (99.56%) |
+| Candidate / accepted entries | 8,206 / 4,185 (51.00%) |
+| Capital-rejected entries | 4,021 across 29 days |
+| Accepted exits | 4,179 |
+
+![Futures/spot realized portfolio performance](docs/figure/futures-spot-portfolio-overview-20260101-20260731.png)
+
+The simulation used NT$50M shared own capital with leverage disabled: both legs
+consumed 100% of notional, each capped at NT$25M. It excludes open-position
+marks. Seven incomplete-tick dates and eight expiry-residual pair runs were
+excluded; capital replay additionally removed six expiry-residual positions.
+Two missing event-data errors were recorded on 2026-07-10. Exact inputs,
+exclusions, latency, and implementation fingerprints belong to that run's
+`backtest_manifest.json`. These are research results, not live performance.
+
+The saved output directory is:
+
+```text
+future_spot/output/hbt_daily_full_market_20260101_20260731_future_order_1ms_response_1ms_feed_0ms_spot_order_1ms_response_35ms_feed_0ms/
+```
+
+Its result-defining execution and capital options included:
 
 ```bash
 python3 future_spot/test/run_full_backtest.py \
@@ -184,106 +229,47 @@ python3 future_spot/test/run_full_backtest.py \
   --no-leverage
 ```
 
-預設資料路徑指向 Linux/WSL 的 `/mnt/z` 掛載點。若儲存配置不同，請提供
-`--futures-parquet-template`、TWSE/TPEX 每日資料 templates，以及
-`--data-platform-base` 參數。完整指令與 runner 控制項請參閱
-[`future_spot/README.md`](future_spot/README.md)。
+## Project layout
 
-## 專案結構
-
-| 路徑 | 職責 |
+| Path | Responsibility |
 | --- | --- |
-| `scripts/strategy_api.py` | 專案共用的 `StrategyContext`、`StrategyDecision`、`Strategy` 與 runner contracts。 |
-| `scripts/hbt_types.py` | 與策略無關的 HBT asset 與 fill dataclasses。 |
-| `scripts/hbt_common.py` | 共用的 queue、order、latency 與 fill helpers。 |
-| `scripts/io_utils.py` | 小型 DataFrame、CSV 與時間處理 helpers。 |
-| `hftbacktest_slim/src/hftbacktest_slim/` | Neutral slim Python API、compact market-data/cache/CLI ownership，以及 runtime binding/reader/models。 |
-| `scripts/tw_stock_data_to_npz.py` | 將臺灣五檔資料列轉成 HftBacktest event arrays 或 `.npz`。 |
-| `scripts/tw_stock_hftbacktest.py` | 共用的股票回測設定、asset 建立、狀態與 BBO helpers。 |
-| `scripts/tw_stock_strategies.py` | 股票 notebook strategies 與 DataFrame summaries。 |
-| `hftbacktest_slim/native/` | 專案自行維護的 Rust slim scheduler、matcher 與穩定 C ABI。 |
-| `future_spot/arbitrage/` | 期現貨定價、風險、執行、HBT、留倉、資金與報表實作。 |
-| `examples/slim_two_asset_strategy/` | 不依賴 `future_spot` 的 neutral slim API 第二策略範例。 |
-| `future_spot/scripts/` | 精簡的期現貨 CLI entrypoints。 |
-| `future_spot/test/run_full_backtest.py` | 完整回測、報表資料表與 PNG 產生流程。 |
-| `notebooks/hbt_pair_backtest_visualization.ipynb` | 使用已安裝 neutral slim API、委派期現貨 adapter 的薄視覺化 runner。 |
-| `notebooks/` | 精簡的實驗 runners 與跨策略整合範例。 |
+| `hftbacktest_slim/` | Strategy-independent Python/Rust runtime, compact schemas, normalization, cache, and CLI tools. |
+| `scripts/strategy_api.py` | Shared strategy context, decision, strategy, runner, and registry contracts. |
+| `scripts/hbt_types.py`, `scripts/hbt_common.py`, `scripts/io_utils.py` | Neutral reference types, execution helpers, and I/O. |
+| `scripts/tw_stock_data_to_npz.py` | Provider snapshots to HftBacktest events. |
+| `scripts/tw_stock_hftbacktest.py`, `scripts/tw_stock_strategies.py` | Stock setup, notebook strategies, and DataFrame summaries. |
+| `scripts/compact_hbt_adapter.py` | Compact-to-reference event reconstruction. |
+| `future_spot/arbitrage/` | Pricing, risk, execution, configuration, carry, capital, and reporting. |
+| `future_spot/scripts/` | Thin strategy CLI entrypoints. |
+| `future_spot/test/run_full_backtest.py` | Supported backtest, report, and plot entrypoint. |
+| `notebooks/` | Thin conversion, strategy, and visualization experiments. |
+| `docs/` | Engine introduction, design contracts, validation evidence, and research reports. |
 
-Slim runtime 的跨策略行為應放在 `hftbacktest_slim/`；其他跨策略 Python contracts
-仍放在根目錄的 `scripts/`。策略資料夾只負責自身領域模型、定價、風險、執行、設定與
-輸出 schema。新的策略家族應實作 `scripts.strategy_api`，不應從
-`future_spot` 匯入可重用行為。詳見
-[`examples/slim_two_asset_strategy/README.md`](examples/slim_two_asset_strategy/README.md) 與
-[`notebooks/hbt_strategy_interface_example.ipynb`](notebooks/hbt_strategy_interface_example.ipynb).
+New strategy families use the neutral slim API or the root strategy contracts;
+they must not import `future_spot` for reusable behavior. The slim package must
+not import strategy code, root HBT helpers, or installed HftBacktest. See the
+[package boundary](docs/HFTBACKTEST_SLIM_MIGRATION.md) and
+[strategy interface notebook](notebooks/hbt_strategy_interface_example.ipynb).
 
-## 期現貨流程
+## Market-data rules
 
-全市場 runner 會執行以下可重現流程：
+Provider rows must be converted before reference replay. HftBacktest consumes
+an in-memory event array or an NPZ with key `data` and fields
+`ev, exch_ts, local_ts, px, qty, order_id, ival, fval`.
 
-1. 選擇交易日期，建立符合資格的股票期貨／現貨 universe。
-2. 建置或驗證選定的市場資料表示：legacy reference 路徑使用 HftBacktest event
-   files，或使用依商品分割的 compact BBO Arrow files。
-3. 使用指定 engine 重播每組 pair，且各腿有獨立的 feed、order 與 response latency。
-4. 將未平倉部位帶到下一交易日，不會暗中轉倉期貨合約。
-5. 依同一份共用資金預算重播已儲存的 fills。
-6. 寫出稽核 CSV、報表資料表與 PNG 圖表。
+Stock conversion uses `data_platform_client/data_stock/api`. The older
+`data_platform/data_stock/api` path truncated decimal ETF prices. A healthy
+`0050` conversion at tick size `0.05` retains prices such as `77.90`, `77.95`,
+`78.00`, and `78.05`.
 
-預設策略在設定的 basis、effective tick 與 visible size 條件成立時，建立現貨多單／
-期貨空單。預設先送出期貨腿；第一腿成交後會重新檢查第二腿條件。保留的回測會先
-等待新的現貨 feed，再決定是否執行第二腿。若第二腿失敗，設定的風險處置會嘗試
-平掉第一腿。
+Top-5 input is market-by-price. Normalize valid levels and aggregate repeated
+prices before choosing BBO or emitting depth. A level is a distinct price;
+individual orders and exact queue positions cannot be recovered. Trade side is
+inferred from the previous BBO unless explicitly configured otherwise.
+ETF and odd-lot feeds lack Top-5 quantities; their default
+`price_only_depth_qty=1.0` supports structural replay, not queue-volume inference.
 
-Reference execution engine 是預設值，其 Numba strategy scanner 為預設的最佳化實作；
-需要除錯或 custom strategy 時可使用 `--strategy-engine python`。受限的 Rust 路徑須
-以 `--engine slim` 明確選擇。Pair processes 可平行執行；啟用部位留倉時，日期仍會
-循序處理。當會影響結果的參數、每日設定、market-data partitions 或 strategy/engine
-原始碼變更時，`backtest_manifest.json` 會阻止重用既有 cache 結果。
-
-### 重要輸出
-
-每次完整執行都會在輸出目錄寫入以下檔案：
-
-- `summary_all_daily_pairs.csv`：pair／日期狀態、部位及已實現損益。
-- `trades_all_daily_pairs.csv`：委託與執行 events。
-- `entry_exit_all_daily_pairs.csv`：精簡的訊號／執行稽核。
-- `market_all_daily_pairs.csv`：取樣市場狀態與非 HOLD 訊號狀態。
-- `latency_all_daily_pairs.csv`：local、spot-exchange 與 futures-exchange 時序 events。
-- `position_carry_status.csv`：期初／期末部位、到期狀態與次日留倉狀態。
-- `run_errors.csv`：pair 失敗或輸入缺漏；每次執行都必須檢查。
-- `reports/`：資金、ROI、失敗、延遲與獲利資料表。
-- `figures/`：投資組合、績效、延遲與資金圖表。
-
-若要縮小報表占用空間，可使用 `--report-mode summary` 與
-`--skip-entry-exit-by-pair`。明細資料表預設使用 Parquet；只有需要逐 event 失敗資訊
-與資金診斷時才使用 `--report-mode full`。
-
-## Event 轉換與市場資料限制
-
-資料供應商的原始資料列不是合法的 HftBacktest 輸入，必須先轉成包含下列欄位的
-event array：
-
-```text
-ev, exch_ts, local_ts, px, qty, order_id, ival, fval
-```
-
-股票轉換必須使用 `data_platform_client/data_stock/api`。舊的
-`data_platform/data_stock/api` 路徑曾將所有欄位強制轉成 `Int64`，導致 ETF 小數價格
-遭截斷。對 tick size 為 `0.05` 的 `0050`，正常 events 應包含 `77.90`、`77.95`、
-`78.00` 與 `78.05` 等價格。
-
-臺灣五檔資料是 market-by-price，而不是 market-by-order：
-
-- 送出 snapshot events 前，必須彙總相同價格的 levels；
-- 無法還原個別委託及精確的 queue position；
-- 因此 queue position 屬於模型假設；
-- `level=5` 是第五個非空價格 level，不是同一價格上的第五筆委託；
-- 若來源資料沒有成交方向，預設會依前一筆 BBO 推定。
-
-ETF 與零股每日 Parquet feeds 具有五檔價格，但沒有五檔數量。Converter 預設填入
-`price_only_depth_qty=1.0`，因此這類重播只能用於結構性的 BBO/depth 檢查，不能視為
-可靠的 queue volume 模擬。
-
-HftBacktest depth 使用整數 tick index 作為索引。查詢數量前須先轉換價格：
+HftBacktest depth quantity methods require integer tick indices:
 
 ```python
 price = 77.10
@@ -291,29 +277,25 @@ tick = round(price / 0.05)
 qty = depth.ask_qty_at_tick(tick)
 ```
 
-不可直接將 `77.10` 傳給 `ask_qty_at_tick`；此方法需要整數 tick（本例為 `1542`）。
+For missing `ask5`/`bid5`, inspect distinct source/event prices and the actual
+instrument tick size before changing conversion or matching logic.
 
-## Notebook 實驗
+## Validation
 
-Notebooks 刻意維持為精簡 runners：
-
-- `hftbacktest_TWStock.ipynb`：股票轉換與三種 queue/fill sanity strategies。
-- `hftbacktest_TWETF.ipynb`：ETF daily Parquet 重播。
-- `hftbacktest_TWOddLot.ipynb`：零股 daily Parquet 重播。
-- `hftbacktest_TWStockFuture.ipynb`：股票期貨 daily Parquet 重播。
-- `hbt_strategy_interface_example.ipynb`：新策略家族的 adapter template。
-
-可重用邏輯應放在 Python modules 中。Notebook 輸出應優先顯示精簡的 summary
-DataFrames，並將明細 frames 保留在個別變數中。
-
-## 驗證
-
-執行聚焦的測試套件，並編譯所有保留的 Python entrypoints：
+Build the native library before running the Python suite:
 
 ```bash
+cargo build --workspace --release
 python3 -m pytest -q tests future_spot/test hftbacktest_slim/tests
 python3 -m compileall -q scripts future_spot hftbacktest_slim/src/hftbacktest_slim
+cargo test --workspace
+cargo fmt --check --all
+cargo clippy --workspace --all-targets -- -D warnings
+git diff --check
 ```
 
-除錯 `ask5` 或 `bid5` 缺漏時，應同時確認來源／events 中不同價格 levels 的數量與
-商品的實際 tick size。不可從已懷疑存在捨入或轉換錯誤的輸出反推 tick size。
+The `0.9.0` integration passed 325 Python tests, 17 Rust tests, compilation,
+formatting, and Clippy. Coverage includes package isolation, external-install
+smoke tests, Top-N projection under both ordering modes, and carry/restart
+regressions. Historical real-data measurements remain tied to the versions and
+limitations in the [Top-N validation report](docs/COMPACT_TOP_N_PHASE5_VALIDATION.md).
